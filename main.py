@@ -4,9 +4,10 @@ import json
 import threading
 from datetime import datetime
 
-# Configurações do Kivy
 from kivy.app import App
 from kivy.clock import Clock
+from kivy.metrics import dp, sp
+from kivy.graphics import Color, RoundedRectangle
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
@@ -80,65 +81,114 @@ def calcular_rsi(closes, period=14):
 def media(lista, periodo):
     return sum(lista[-periodo:]) / periodo
 
+# ===== COMPONENTES DE INTERFACE RESPONSIVOS =====
+class CustomLabel(Label):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.font_size = sp(13)
+        self.color = (0.85, 0.85, 0.85, 1)
+        self.size_hint_y = None
+        self.height = dp(24)
+        self.halign = 'left'
+        self.valign = 'middle'
+        self.bind(size=self._update_text_size)
+
+    def _update_text_size(self, instance, value):
+        self.text_size = (value[0], value[1])
+
+class CustomInput(TextInput):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.size_hint_y = None
+        self.height = dp(46)
+        self.font_size = sp(14)
+        self.padding = [dp(12), dp(12), dp(12), dp(12)]
+        self.background_color = (0.15, 0.16, 0.18, 1)
+        self.foreground_color = (1, 1, 1, 1)
+        self.cursor_color = (0, 0.7, 1, 1)
+
 class TradingBotUI(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
-        self.padding = [15, 25, 15, 15]
-        self.spacing = 10
+        self.padding = [dp(16), dp(20), dp(16), dp(16)]
+        self.spacing = dp(12)
         self.bot_rodando = False
 
         carregar_dados_ia()
 
+        # Cabeçalho
         self.add_widget(Label(
             text="Bot Trading Binance",
-            font_size='20sp',
+            font_size=sp(20),
             bold=True,
+            color=(1, 1, 1, 1),
             size_hint_y=None,
-            height=40
+            height=dp(36)
         ))
 
-        scroll = ScrollView(size_hint=(1, 1))
-        form = GridLayout(cols=1, spacing=10, size_hint_y=None)
+        # Formulário em ScrollView para telas menores
+        scroll_form = ScrollView(size_hint=(1, None), height=dp(280))
+        form = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
         form.bind(minimum_height=form.setter('height'))
 
-        form.add_widget(Label(text="Binance API Key", size_hint_y=None, height=20))
-        self.api_key = TextInput(hint_text="API Key", multiline=False, size_hint_y=None, height=48, padding=[10, 12, 10, 12])
+        form.add_widget(CustomLabel(text="Binance API Key"))
+        self.api_key = CustomInput(hint_text="Insira sua API Key", multiline=False)
         form.add_widget(self.api_key)
 
-        form.add_widget(Label(text="Binance Secret Key", size_hint_y=None, height=20))
-        self.api_secret = TextInput(hint_text="Secret Key", password=True, multiline=False, size_hint_y=None, height=48, padding=[10, 12, 10, 12])
+        form.add_widget(CustomLabel(text="Binance Secret Key"))
+        self.api_secret = CustomInput(hint_text="Insira sua Secret Key", password=True, multiline=False)
         form.add_widget(self.api_secret)
 
-        form.add_widget(Label(text="Pares (separados por espaco)", size_hint_y=None, height=20))
-        self.symbols = TextInput(text="BTC/USDT ETH/USDT", multiline=False, size_hint_y=None, height=48, padding=[10, 12, 10, 12])
+        form.add_widget(CustomLabel(text="Pares de Moedas"))
+        self.symbols = CustomInput(text="BTC/USDT ETH/USDT", multiline=False)
         form.add_widget(self.symbols)
 
-        form.add_widget(Label(text="Valor por Ordem (USDT)", size_hint_y=None, height=20))
-        self.valor_usdt = TextInput(text="10", multiline=False, size_hint_y=None, height=48, padding=[10, 12, 10, 12])
+        form.add_widget(CustomLabel(text="Valor por Ordem (USDT)"))
+        self.valor_usdt = CustomInput(text="10", multiline=False)
         form.add_widget(self.valor_usdt)
 
+        scroll_form.add_widget(form)
+        self.add_widget(scroll_form)
+
+        # Botão Ligar/Desligar
         self.btn_toggle = Button(
-            text="LIGAR ROBO",
+            text="LIGAR ROBÔ",
+            font_size=sp(16),
             bold=True,
-            background_color=(0, 0.6, 0.2, 1),
+            background_color=(0, 0.7, 0.3, 1),
             size_hint_y=None,
-            height=52
+            height=dp(50)
         )
         self.btn_toggle.bind(on_press=self.toggle_bot)
-        form.add_widget(self.btn_toggle)
+        self.add_widget(self.btn_toggle)
 
+        # Container do Status (Card de Monitoramento)
+        status_card = BoxLayout(orientation='vertical', padding=dp(10))
+        with status_card.canvas.before:
+            Color(0.1, 0.11, 0.13, 1)
+            self.rect = RoundedRectangle(pos=status_card.pos, size=status_card.size, radius=[dp(8)])
+        status_card.bind(pos=self._update_rect, size=self._update_rect)
+
+        scroll_status = ScrollView(size_hint=(1, 1))
         self.status = Label(
-            text="Aguardando inicio...",
-            font_size='13sp',
-            color=(0.7, 0.7, 0.7, 1),
+            text="Aguardando início...",
+            font_size=sp(13),
+            color=(0.8, 0.8, 0.8, 1),
             size_hint_y=None,
-            height=60
+            halign='left',
+            valign='top'
         )
-        form.add_widget(self.status)
+        self.status.bind(width=lambda img, val: setattr(self.status, 'text_size', (val, None)))
+        self.status.bind(texture_size=lambda img, val: setattr(self.status, 'height', val[1]))
 
-        scroll.add_widget(form)
-        self.add_widget(scroll)
+        scroll_status.add_widget(self.status)
+        status_card.add_widget(scroll_status)
+        self.add_widget(status_card)
+
+    def _update_rect(self, instance, value):
+        self.rect.pos = instance.pos
+        self.rect.size = instance.size
 
     def atualizar_status(self, texto):
         Clock.schedule_once(lambda dt: setattr(self.status, 'text', texto))
@@ -146,17 +196,16 @@ class TradingBotUI(BoxLayout):
     def toggle_bot(self, instance):
         if not self.bot_rodando:
             self.bot_rodando = True
-            self.btn_toggle.text = "DESLIGAR ROBO"
-            self.btn_toggle.background_color = (0.8, 0.1, 0.1, 1)
+            self.btn_toggle.text = "DESLIGAR ROBÔ"
+            self.btn_toggle.background_color = (0.85, 0.2, 0.2, 1)
             threading.Thread(target=self.loop_principal_bot, daemon=True).start()
         else:
             self.bot_rodando = False
-            self.btn_toggle.text = "LIGAR ROBO"
-            self.btn_toggle.background_color = (0, 0.6, 0.2, 1)
-            self.atualizar_status("Robo desligado.")
+            self.btn_toggle.text = "LIGAR ROBÔ"
+            self.btn_toggle.background_color = (0, 0.7, 0.3, 1)
+            self.atualizar_status("Robô desligado.")
 
     def loop_principal_bot(self):
-        # Importacao tardia para evitar crash na inicializacao do aplicativo
         try:
             import ccxt
         except Exception as e:
@@ -182,7 +231,7 @@ class TradingBotUI(BoxLayout):
             })
             exchange.load_markets()
         except Exception as e:
-            self.atualizar_status(f"Erro conexao Binance: {e}")
+            self.atualizar_status(f"Erro conexão Binance: {e}")
             self.bot_rodando = False
             return
 
@@ -201,7 +250,7 @@ class TradingBotUI(BoxLayout):
                 }
 
         while self.bot_rodando:
-            self.atualizar_status("Buscando dados da Binance...")
+            self.atualizar_status("Buscando dados na Binance...")
             try:
                 saldo_geral = exchange.fetch_balance()
             except Exception as e:
@@ -232,7 +281,16 @@ class TradingBotUI(BoxLayout):
                 em_operacao = qtd > 0.0001
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
 
-                self.atualizar_status(f"{SYMBOL} | R$: {preco:.2f} | RSI: {rsi:.1f}\nUSDT: {usdt:.2f} | {ativo}: {qtd:.4f}")
+                self.atualizar_status(
+                    f"=== PAINEL DE MONITORAMENTO ===\n\n"
+                    f"Par: {SYMBOL}\n"
+                    f"Preço Atual: USDT {preco:.2f}\n"
+                    f"RSI (14): {rsi:.1f}\n\n"
+                    f"--- Carteira ---\n"
+                    f"Saldo USDT: {usdt:.2f}\n"
+                    f"Saldo {ativo}: {qtd:.4f}\n\n"
+                    f"Status: {'EM OPERAÇÃO' if em_operacao else 'AGUARDANDO SINAL'}"
+                )
 
                 # LÓGICA DE COMPRA
                 if not em_operacao and usdt >= valor_ordem:
@@ -300,7 +358,7 @@ class TradingBotUI(BoxLayout):
 
                 time.sleep(2)
 
-        self.atualizar_status("Robo finalizado.")
+        self.atualizar_status("Robô desligado.")
 
 class BinanceBotApp(App):
     def build(self):
@@ -308,4 +366,4 @@ class BinanceBotApp(App):
 
 if __name__ == '__main__':
     BinanceBotApp().run()
-                    
+    

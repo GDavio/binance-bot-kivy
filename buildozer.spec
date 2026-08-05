@@ -6,8 +6,8 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Cython e suporte SSL/ffi para requisições HTTPS e criptografia do ccxt
-requirements = python3,kivy==2.3.0,openssl,requests,urllib3,chardet,certifi,idna,cryptography,ccxt
+# Removido ccxt direto e adicionado apenas o necessário para requisições HTTPS
+requirements = python3,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait
 fullscreen = 0

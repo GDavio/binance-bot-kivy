@@ -6,14 +6,13 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Requisitos essenciais para Kivy + Requisições HTTP da Binance
-requirements = python3,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
+# Trava explicitamente o Python em 3.11 para evitar a versão experimental 3.14
+requirements = python3==3.11.0,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET
 
-# Configurações de API e NDK sincronizadas com o runner
 android.api = 33
 android.minapi = 21
 android.ndk = 25b

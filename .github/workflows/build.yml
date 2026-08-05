@@ -8,20 +8,21 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/kivy/buildozer:latest
 
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
 
-      - name: Gerar APK dentro do Container
-        run: |
-          buildozer android debug
+      - name: Gerar APK com Buildozer Action
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          buildozer_version: master
 
       - name: Disponibilizar APK para Download
         uses: actions/upload-artifact@v4
         with:
           name: binance-bot-apk
-          path: bin/*.apk
+          path: ${{ steps.buildozer.outputs.filename }}
           

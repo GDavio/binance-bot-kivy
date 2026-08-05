@@ -7,65 +7,17 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/kivy/buildozer:latest
 
     steps:
       - name: Checkout do código
         uses: actions/checkout@v4
 
-      - name: Configurar Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Instalar Dependências do Sistema e Java 17
+      - name: Gerar APK dentro do Container
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            git \
-            ffmpeg \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libsdl2-mixer-dev \
-            libsdl2-ttf-dev \
-            libportmidi-dev \
-            libswscale-dev \
-            libavformat-dev \
-            libavcodec-dev \
-            zlib1g-dev \
-            libsqlite3-dev \
-            sqlite3 \
-            bzip2 \
-            libfreetype6-dev \
-            autoconf \
-            libtool \
-            pkg-config \
-            libssl-dev \
-            libffi-dev \
-            openjdk-17-jdk
-
-      - name: Instalar Buildozer e Ferramentas Python
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install "cython<3.0.0"
-          pip install buildozer
-
-      - name: Baixar e Configurar Android NDK r25b
-        run: |
-          mkdir -p $HOME/android-ndk
-          cd $HOME/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-          unzip -q android-ndk-r25b-linux.zip
-          rm android-ndk-r25b-linux.zip
-
-      - name: Limpar e Gerar APK
-        env:
-          ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
-          ANDROID_NDK_ROOT: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
-        run: |
-          buildozer android clean
-          buildozer -v android debug
+          buildozer android debug
 
       - name: Disponibilizar APK para Download
         uses: actions/upload-artifact@v4

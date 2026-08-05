@@ -6,7 +6,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Removido ccxt direto e adicionado apenas o necessário para requisições HTTPS
+# Apenas bibliotecas puras e leves sem necessidade de receitas C customizadas
 requirements = python3,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait

@@ -13,16 +13,11 @@ jobs:
     - name: Checkout Código
       uses: actions/checkout@v4
 
-    - name: Configurar Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Gerar APK com Buildozer
-      uses: ArtemSuldin/buildozer-action@v1
+    - name: Gerar APK com Buildozer Oficial
+      uses: kivy/buildozer-action@v1.3.0
       with:
         workdir: .
-        buildozer_version: master
+        buildozer_version: stable
 
     - name: Disponibilizar APK para Download
       uses: actions/upload-artifact@v4

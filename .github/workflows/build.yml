@@ -59,7 +59,7 @@ jobs:
           unzip -q android-ndk-r25b-linux.zip
           rm android-ndk-r25b-linux.zip
 
-      - name: Limpar Builds Anteriores e Gerar APK
+      - name: Limpar e Gerar APK
         env:
           ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
           ANDROID_NDK_ROOT: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b

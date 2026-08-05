@@ -6,14 +6,14 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Bibliotecas puras sem compilação Rust/C pesada
+# Requisitos essenciais para Kivy + Requisições HTTP da Binance
 requirements = python3,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET
 
-# Trava NDK e SDK em versões estáveis testadas
+# Configurações de API e NDK sincronizadas com o runner
 android.api = 33
 android.minapi = 21
 android.ndk = 25b

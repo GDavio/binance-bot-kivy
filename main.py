@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import ssl
 import hmac
 import hashlib
 import urllib.parse
@@ -19,12 +20,17 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 
-# ===== CLIENTE REST BINANCE NATIVO (SEM DEPENDÊNCIAS C/RUST) =====
+# ===== CLIENTE REST BINANCE NATIVO COM BYPASS SSL PARA ANDROID =====
 class BinanceNativeAPI:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = "https://api.binance.com"
+        
+        # Contexto SSL sem verificação estrita para contornar a falta de certificados no Android
+        self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = False
+        self.ssl_context.verify_mode = ssl.CERT_NONE
 
     def _assinar_query(self, params):
         query_string = urllib.parse.urlencode(params)
@@ -50,7 +56,7 @@ class BinanceNativeAPI:
             url = f"{self.base_url}{endpoint}?{query}" if query else f"{self.base_url}{endpoint}"
 
         req = urllib.request.Request(url, headers=headers, method=metodo)
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=10, context=self.ssl_context) as response:
             return json.loads(response.read().decode('utf-8'))
 
     def fetch_ohlcv(self, symbol, interval="1m", limit=50):
@@ -146,6 +152,7 @@ def calcular_rsi(closes, period=14):
 def media(lista, periodo):
     return sum(lista[-periodo:]) / periodo
 
+# ===== COMPONENTES DE INTERFACE RESPONSIVOS =====
 class CustomLabel(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -181,6 +188,7 @@ class TradingBotUI(BoxLayout):
 
         carregar_dados_ia()
 
+        # Cabeçalho
         self.add_widget(Label(
             text="Bot Trading Binance",
             font_size=sp(20),
@@ -190,6 +198,7 @@ class TradingBotUI(BoxLayout):
             height=dp(36)
         ))
 
+        # Formulário em ScrollView para responsividade mobile
         scroll_form = ScrollView(size_hint=(1, None), height=dp(280))
         form = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
         form.bind(minimum_height=form.setter('height'))
@@ -213,6 +222,7 @@ class TradingBotUI(BoxLayout):
         scroll_form.add_widget(form)
         self.add_widget(scroll_form)
 
+        # Botão Ligar/Desligar
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
             font_size=sp(16),
@@ -224,6 +234,7 @@ class TradingBotUI(BoxLayout):
         self.btn_toggle.bind(on_press=self.toggle_bot)
         self.add_widget(self.btn_toggle)
 
+        # Card de Status
         status_card = BoxLayout(orientation='vertical', padding=dp(10))
         with status_card.canvas.before:
             Color(0.1, 0.11, 0.13, 1)
@@ -350,7 +361,7 @@ class TradingBotUI(BoxLayout):
                         except Exception as e:
                             print(f"Erro ao comprar {SYMBOL}: {e}")
 
-                # LÓGICA DE VENDA
+                # LÓGICA DE VENDA / STOP
                 if em_operacao and estado["preco_entrada"] > 0:
                     lucro_bruto = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
                     lucro_liquido = lucro_bruto - (TAXA_CORRETORA * 2 * 100)

@@ -1,0 +1,32 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Código
+      uses: actions/checkout@v3
+
+    - name: Configurar Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Gerar APK com Buildozer
+      uses: ArtemSuldin/buildozer-action@v1
+      with:
+        workdir: .
+        buildozer_version: master
+
+    - name: Disponibilizar APK para Download
+      uses: actions/upload-artifact@v3
+      with:
+        name: BinanceBot-APK
+        path: bin/*.apk
+        

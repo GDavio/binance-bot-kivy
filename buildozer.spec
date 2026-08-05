@@ -6,14 +6,14 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Define a versão estável do Python e do Kivy
-requirements = python3==3.11.0,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
+# Inclui cython trava-língua < 3.0 para compilar o Kivy corretamente
+requirements = python3,kivy==2.3.0,cython==0.29.33,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET
 
-# Trava NDK e SDK nas versões compatíveis
+# Configurações do SDK/NDK
 android.api = 33
 android.minapi = 21
 android.ndk = 25b

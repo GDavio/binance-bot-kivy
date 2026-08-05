@@ -27,7 +27,6 @@ class BinanceNativeAPI:
         self.api_secret = api_secret
         self.base_url = "https://api.binance.com"
         
-        # Contexto SSL sem verificação estrita para contornar a falta de certificados no Android
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
@@ -95,14 +94,26 @@ class BinanceNativeAPI:
         preco = float(res.get("cummulativeQuoteQty", 0)) / float(res.get("executedQty", 1)) if float(res.get("executedQty", 0)) > 0 else 0
         return {"price": preco, "average": preco}
 
-# ===== CONFIGURAÇÕES GLOBAIS =====
-DADOS_IA = "dados_ia.json"
-ARQUIVO_ESTADO = "estado_bot.json"
+# ===== CONFIGURAÇÕES E UTILITÁRIOS ATÔMICOS =====
 TAXA_CORRETORA = 0.001
+TEMPO_MAXIMO_TRADE = 7200
 COOLDOWN = 120
+
+ARQUIVO_ESTADO = "estado_bot.json"
+ARQUIVO_RELATORIO = "relatorio_bot.txt"
+DADOS_IA = "dados_ia.json"
 
 historico_ia = []
 estado_por_par = {}
+
+def salvar_json_atomico(caminho, dados):
+    tmp = f"{caminho}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(dados, f, indent=2)
+        os.replace(tmp, caminho)
+    except Exception as e:
+        print(f"Erro ao salvar {caminho}: {e}")
 
 def carregar_dados_ia():
     global historico_ia
@@ -112,6 +123,21 @@ def carregar_dados_ia():
                 historico_ia = json.load(f)
         except Exception:
             historico_ia = []
+
+def salvar_dados_ia():
+    salvar_json_atomico(DADOS_IA, historico_ia)
+
+def carregar_estado():
+    global estado_por_par
+    if os.path.exists(ARQUIVO_ESTADO):
+        try:
+            with open(ARQUIVO_ESTADO, "r") as f:
+                estado_por_par = json.load(f)
+        except Exception:
+            estado_por_par = {}
+
+def salvar_estado():
+    salvar_json_atomico(ARQUIVO_ESTADO, estado_por_par)
 
 def prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada):
     if len(historico_ia) < 20:
@@ -125,6 +151,10 @@ def prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada):
         peso *= max(0, 1 - abs(d["rsi"] - rsi) / 15)
         peso *= max(0, 1 - abs(d["volatilidade"] - volatilidade) / 0.5)
         peso *= max(0, 1 - abs(d["distancia_ma"] - ((ma9 - ma21) / ma21 * 100)) / 0.3)
+        if d.get("posicao_preco_ma9") != (preco > ma9):
+            peso *= 0.5
+        if d.get("posicao_preco_ma21") != (preco > ma21):
+            peso *= 0.5
         if d.get("tipo_entrada") != tipo_entrada:
             peso *= 0.3
         if peso < 0.1:
@@ -152,7 +182,46 @@ def calcular_rsi(closes, period=14):
 def media(lista, periodo):
     return sum(lista[-periodo:]) / periodo
 
-# ===== COMPONENTES DE INTERFACE RESPONSIVOS =====
+def estrategia_valida(estado, nome):
+    dados = estado.get("estrategias", {}).get(nome, {"wins": 0, "losses": 0})
+    total = dados["wins"] + dados["losses"]
+    if total < 5:
+        return True
+    return (dados["wins"] / total) >= 0.40
+
+def sync_posicao(symbol, preco_atual, quantidade, rsi, ma9, ma21):
+    estado = estado_por_par[symbol]
+    if quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0:
+        estado["preco_entrada"] = preco_atual
+        estado["topo_preco"] = preco_atual
+        estado["tipo_operacao"] = "COMPRA_EXTERNAL_SYNC"
+        estado["tipo_entrada"] = "desconhecido"
+        estado["ultimo_trade_time"] = time.time()
+        estado["tempo_entrada"] = time.time()
+        estado["entrada_rsi"] = rsi
+        estado["entrada_ma9"] = ma9
+        estado["entrada_ma21"] = ma21
+        estado["entrada_distancia_ma"] = (ma9 - ma21) / ma21 * 100
+        estado["entrada_volatilidade"] = 0.2
+        estado["entrada_posicao_ma9"] = preco_atual > ma9
+        estado["entrada_posicao_ma21"] = preco_atual > ma21
+        salvar_estado()
+
+def salvar_trade_relatorio(symbol, estado, lucro, preco_saida, rsi_saida, ma9_saida, ma21_saida, lucro_max):
+    tempo_operacao = int(time.time() - estado.get("tempo_entrada", time.time()))
+    try:
+        with open(ARQUIVO_RELATORIO, "a") as f:
+            f.write("==============================\n")
+            f.write(f"Par: {symbol}\n")
+            f.write(f"Data: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Tipo: {estado.get('tipo_operacao', 'N/A')} ({estado.get('tipo_entrada', 'N/A')})\n")
+            f.write(f"Entrada: {estado.get('preco_entrada', 0):.2f} | Saída: {preco_saida:.2f}\n")
+            f.write(f"Lucro Líquido: {lucro:.2f}% | Lucro Máx: {lucro_max:.2f}%\n")
+            f.write(f"Tempo Operação: {tempo_operacao}s\n\n")
+    except Exception as e:
+        print(f"Erro relatório: {e}")
+
+# ===== INTERFACE GRÁFICA =====
 class CustomLabel(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -171,9 +240,9 @@ class CustomInput(TextInput):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.size_hint_y = None
-        self.height = dp(46)
+        self.height = dp(44)
         self.font_size = sp(14)
-        self.padding = [dp(12), dp(12), dp(12), dp(12)]
+        self.padding = [dp(10), dp(10), dp(10), dp(10)]
         self.background_color = (0.15, 0.16, 0.18, 1)
         self.foreground_color = (1, 1, 1, 1)
         self.cursor_color = (0, 0.7, 1, 1)
@@ -182,25 +251,24 @@ class TradingBotUI(BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = 'vertical'
-        self.padding = [dp(16), dp(20), dp(16), dp(16)]
-        self.spacing = dp(12)
+        self.padding = [dp(16), dp(16), dp(16), dp(16)]
+        self.spacing = dp(10)
         self.bot_rodando = False
 
+        carregar_estado()
         carregar_dados_ia()
 
-        # Cabeçalho
         self.add_widget(Label(
             text="Bot Trading Binance",
             font_size=sp(20),
             bold=True,
             color=(1, 1, 1, 1),
             size_hint_y=None,
-            height=dp(36)
+            height=dp(30)
         ))
 
-        # Formulário em ScrollView para responsividade mobile
-        scroll_form = ScrollView(size_hint=(1, None), height=dp(280))
-        form = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
+        scroll_form = ScrollView(size_hint=(1, None), height=dp(260))
+        form = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
         form.bind(minimum_height=form.setter('height'))
 
         form.add_widget(CustomLabel(text="Binance API Key"))
@@ -212,7 +280,7 @@ class TradingBotUI(BoxLayout):
         form.add_widget(self.api_secret)
 
         form.add_widget(CustomLabel(text="Pares de Moedas"))
-        self.symbols = CustomInput(text="BTC/USDT ETH/USDT", multiline=False)
+        self.symbols = CustomInput(text="ETH/USDT BTC/USDT", multiline=False)
         form.add_widget(self.symbols)
 
         form.add_widget(CustomLabel(text="Valor por Ordem (USDT)"))
@@ -222,19 +290,17 @@ class TradingBotUI(BoxLayout):
         scroll_form.add_widget(form)
         self.add_widget(scroll_form)
 
-        # Botão Ligar/Desligar
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
             font_size=sp(16),
             bold=True,
             background_color=(0, 0.7, 0.3, 1),
             size_hint_y=None,
-            height=dp(50)
+            height=dp(48)
         )
         self.btn_toggle.bind(on_press=self.toggle_bot)
         self.add_widget(self.btn_toggle)
 
-        # Card de Status
         status_card = BoxLayout(orientation='vertical', padding=dp(10))
         with status_card.canvas.before:
             Color(0.1, 0.11, 0.13, 1)
@@ -244,8 +310,8 @@ class TradingBotUI(BoxLayout):
         scroll_status = ScrollView(size_hint=(1, 1))
         self.status = Label(
             text="Aguardando início...",
-            font_size=sp(13),
-            color=(0.8, 0.8, 0.8, 1),
+            font_size=sp(12),
+            color=(0.85, 0.85, 0.85, 1),
             size_hint_y=None,
             halign='left',
             valign='top'
@@ -292,15 +358,21 @@ class TradingBotUI(BoxLayout):
             if s not in estado_por_par:
                 estado_por_par[s] = {
                     "preco_entrada": 0, "topo_preco": 0, "ultimo_trade_time": 0,
-                    "tipo_entrada": ""
+                    "tipo_operacao": "", "tipo_entrada": "", "entrada_rsi": 0,
+                    "entrada_ma9": 0, "entrada_ma21": 0, "tempo_entrada": 0,
+                    "wins": 0, "losses": 0,
+                    "estrategias": {
+                        "pullback": {"wins": 0, "losses": 0},
+                        "continuidade": {"wins": 0, "losses": 0},
+                        "rompimento": {"wins": 0, "losses": 0}
+                    }
                 }
 
         while self.bot_rodando:
-            self.atualizar_status("Buscando dados na Binance...")
             try:
                 saldo_geral = exchange.fetch_balance()
             except Exception as e:
-                self.atualizar_status(f"Erro ao carregar saldo: {e}")
+                self.atualizar_status(f"⚠️ Erro ao carregar saldo: {e}")
                 time.sleep(5)
                 continue
 
@@ -314,6 +386,7 @@ class TradingBotUI(BoxLayout):
                     closes = [c[4] for c in candles]
                     preco = closes[-1]
                     rsi = calcular_rsi(closes)
+                    rsi_anterior = calcular_rsi(closes[:-1])
                     ma9 = media(closes, 9)
                     ma21 = media(closes, 21)
                     
@@ -324,72 +397,78 @@ class TradingBotUI(BoxLayout):
                     print(f"Erro leitura ({SYMBOL}): {e}")
                     continue
 
+                sync_posicao(SYMBOL, preco, qtd, rsi, ma9, ma21)
                 em_operacao = qtd > 0.0001
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
 
-                self.atualizar_status(
-                    f"=== PAINEL DE MONITORAMENTO ===\n\n"
-                    f"Par: {SYMBOL}\n"
-                    f"Preço Atual: USDT {preco:.2f}\n"
-                    f"RSI (14): {rsi:.1f}\n\n"
-                    f"--- Carteira ---\n"
-                    f"Saldo USDT: {usdt:.2f}\n"
-                    f"Saldo {ativo}: {qtd:.4f}\n\n"
-                    f"Status: {'EM OPERAÇÃO' if em_operacao else 'AGUARDANDO SINAL'}"
-                )
-
-                # LÓGICA DE COMPRA
+                # LÓGICA DE ENTRADA
                 if not em_operacao and usdt >= valor_ordem:
                     tempo_ok = (time.time() - estado["ultimo_trade_time"]) > COOLDOWN
+                    distancia_ma = (ma9 - ma21) / ma21 * 100
                     tendencia = ma9 > ma21
+                    tendencia_forte = distancia_ma > 0.02
 
-                    pullback = (tendencia and preco <= ma9 * 1.003 and preco > ma9 and rsi < 55)
-                    continuidade = (tendencia and preco > ma9 and 52 < rsi < 65)
+                    pullback = (tendencia and preco <= ma9 * 1.003 and preco > ma9 and rsi < 55 and rsi > rsi_anterior and estrategia_valida(estado, "pullback"))
+                    continuidade = (tendencia and preco > ma9 and 52 < rsi < 65 and rsi > rsi_anterior and closes[-1] > closes[-2] and (distancia_ma > 0.05 or (distancia_ma > 0.003 and closes[-1] > closes[-2])) and estrategia_valida(estado, "continuidade"))
+                    rompimento = (tendencia_forte and preco >= max(closes[-3:]) and closes[-1] > closes[-2] and 55 < rsi < 72 and rsi > rsi_anterior and preco > ma9 and (preco - closes[-3]) / closes[-3] * 100 > 0.03 and estrategia_valida(estado, "rompimento"))
 
-                    tipo_entrada = "pullback" if pullback else "continuidade" if continuidade else "nenhum"
+                    tipo_entrada = "pullback" if pullback else "continuidade" if continuidade else "rompimento" if rompimento else "nenhum"
                     prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                    if (pullback or continuidade) and volatilidade > 0.15 and tempo_ok and prob > 0.50:
+                    if (pullback or continuidade or rompimento) and volatilidade > 0.15 and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
                         try:
                             order = exchange.create_market_buy_order(SYMBOL, valor_ordem)
                             preco_executado = order.get('price') or preco
 
                             estado["preco_entrada"] = preco_executado
                             estado["topo_preco"] = preco_executado
+                            estado["tempo_entrada"] = time.time()
                             estado["ultimo_trade_time"] = time.time()
+                            estado["tipo_operacao"] = "COMPRA"
                             estado["tipo_entrada"] = tipo_entrada
+                            estado["entrada_rsi"] = rsi
+                            estado["entrada_ma9"] = ma9
+                            estado["entrada_ma21"] = ma21
+                            estado["entrada_distancia_ma"] = distancia_ma
+                            estado["entrada_volatilidade"] = volatilidade
+                            estado["entrada_posicao_ma9"] = preco > ma9
+                            estado["entrada_posicao_ma21"] = preco > ma21
+                            salvar_estado()
                         except Exception as e:
                             print(f"Erro ao comprar {SYMBOL}: {e}")
 
-                # LÓGICA DE VENDA / STOP
+                # LÓGICA DE SAÍDA / TRAILING STOP
+                lucro_liquido = 0.0
                 if em_operacao and estado["preco_entrada"] > 0:
                     lucro_bruto = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
                     lucro_liquido = lucro_bruto - (TAXA_CORRETORA * 2 * 100)
 
                     if preco > estado["topo_preco"]:
                         estado["topo_preco"] = preco
+                        salvar_estado()
+
+                    lucro_max_bruto = ((estado["topo_preco"] - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
+                    lucro_max_liquido = lucro_max_bruto - (TAXA_CORRETORA * 2 * 100)
 
                     vender = False
                     stop_emergencia = estado["preco_entrada"] * 0.995
+                    tempo_em_trade = time.time() - estado.get("tempo_entrada", time.time())
 
-                    if preco <= stop_emergencia or (rsi < 38 and lucro_liquido < -0.25):
+                    if preco <= stop_emergencia:
                         vender = True
+                    elif rsi < 38 and rsi < rsi_anterior and preco < ma9 and preco < closes[-2] and lucro_liquido < -0.25:
+                        vender = True
+                    elif all(c < ma21 for c in closes[-3:]) and rsi < 43 and rsi < rsi_anterior and lucro_liquido < -0.35:
+                        vender = True
+                    elif tempo_em_trade > TEMPO_MAXIMO_TRADE and lucro_liquido < 0.10:
+                        vender = True
+                    elif lucro_max_liquido >= 0.35:
+                        lucro_travado = 0.10 if lucro_max_liquido < 0.70 else 0.35 if lucro_max_liquido < 1.05 else 0.70 if lucro_max_liquido < 1.40 else 1.05 if lucro_max_liquido < 1.75 else (lucro_max_liquido - 0.35)
+                        stop_dinamico = estado["preco_entrada"] * (1 + (lucro_travado + (TAXA_CORRETORA * 200)) / 100)
+                        if preco <= stop_dinamico:
+                            vender = True
 
                     if vender:
                         try:
                             order = exchange.create_market_sell_order(SYMBOL, qtd)
-                            estado["preco_entrada"] = 0
-                        except Exception as e:
-                            print(f"Erro ao vender {SYMBOL}: {e}")
-
-                time.sleep(2)
-
-        self.atualizar_status("Robô desligado.")
-
-class BinanceBotApp(App):
-    def build(self):
-        return TradingBotUI()
-
-if __name__ == '__main__':
-    BinanceBotApp().run()
-    
+                            preco_saida = order.get('price') o

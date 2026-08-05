@@ -26,11 +26,11 @@ jobs:
     - name: Instalar Buildozer e Cython
       run: |
         pip install --upgrade pip
-        pip install buildozer cython
+        pip install "buildozer<2.0.0" cython
 
-    - name: Gerar APK com Buildozer
+    - name: Aceitar Licenças do Android SDK e Gerar APK
       run: |
-        buildozer android release || buildozer android debug
+        yes | buildozer android debug
 
     - name: Disponibilizar APK para Download
       uses: actions/upload-artifact@v4

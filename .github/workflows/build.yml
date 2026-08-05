@@ -28,16 +28,9 @@ jobs:
         pip install --upgrade pip
         pip install "buildozer<2.0.0" cython
 
-    - name: Aceitar Licenças do Android SDK (Forçado)
-        run: |
-            buildozer android p4a -- get-p4a-build-dir
-            P4A_DIR=$(buildozer android p4a -- get-p4a-build-dir | tail -n 1)
-            # Aceita licenças usando o sdkmanager do Android
-            yes | $P4A_DIR/platform/android-sdk/tools/bin/sdkmanager --licenses || true
-
-    - name: Gerar APK com Buildozer
+    - name: Gerar APK com Aceite de Licença
       run: |
-        buildozer android debug
+        buildozer --profile debug android debug
 
     - name: Disponibilizar APK para Download
       uses: actions/upload-artifact@v4

@@ -376,6 +376,8 @@ class TradingBotUI(BoxLayout):
                 time.sleep(5)
                 continue
 
+            logs_painel = []
+
             for SYMBOL in lista_pares:
                 if not self.bot_rodando:
                     break
@@ -471,4 +473,52 @@ class TradingBotUI(BoxLayout):
                     if vender:
                         try:
                             order = exchange.create_market_sell_order(SYMBOL, qtd)
-                            preco_saida = order.get('price') o
+                            preco_saida = order.get('price') or preco
+
+                            resultado_pct = ((preco_saida - estado["preco_entrada"]) / estado["preco_entrada"]) * 100 - (TAXA_CORRETORA * 2 * 100)
+                            salvar_trade_relatorio(SYMBOL, estado, resultado_pct, preco_saida, rsi, ma9, ma21, lucro_max_liquido)
+
+                            tipo_strat = estado.get("tipo_entrada", "")
+                            if tipo_strat in estado.get("estrategias", {}):
+                                if resultado_pct > 0:
+                                    estado["estrategias"][tipo_strat]["wins"] += 1
+                                    estado["wins"] += 1
+                                else:
+                                    estado["estrategias"][tipo_strat]["losses"] += 1
+                                    estado["losses"] += 1
+
+                            historico_ia.append({
+                                "rsi": estado.get("entrada_rsi", 50),
+                                "volatilidade": estado.get("entrada_volatilidade", 0.2),
+                                "distancia_ma": estado.get("entrada_distancia_ma", 0),
+                                "posicao_preco_ma9": estado.get("entrada_posicao_ma9", True),
+                                "posicao_preco_ma21": estado.get("entrada_posicao_ma21", True),
+                                "tipo_entrada": estado.get("tipo_entrada", "desconhecido"),
+                                "resultado": resultado_pct
+                            })
+                            salvar_dados_ia()
+
+                            estado["preco_entrada"] = 0
+                            estado["topo_preco"] = 0
+                            estado["tipo_operacao"] = ""
+                            estado["tipo_entrada"] = ""
+                            estado["ultimo_trade_time"] = time.time()
+                            salvar_estado()
+                        except Exception as e:
+                            print(f"Erro ao vender {SYMBOL}: {e}")
+
+                status_pos = f"EM TRADE ({lucro_liquido:+.2f}%)" if em_operacao else "AGUARDANDO"
+                logs_painel.append(f"[{SYMBOL}] Preço: {preco:.2f} | RSI: {rsi:.1f} | {status_pos}")
+
+            log_texto = f"Última atualização: {datetime.now().strftime('%H:%M:%S')}\n" + "\n".join(logs_painel)
+            self.atualizar_status(log_texto)
+            time.sleep(3)
+
+class TradingApp(App):
+    def build(self):
+        return TradingBotUI()
+
+if __name__ == "__main__":
+    TradingApp().run()
+
+

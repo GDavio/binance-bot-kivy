@@ -20,7 +20,7 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 
-# ===== CLIENTE REST BINANCE NATIVO COM BYPASS SSL PARA ANDROID =====
+# ===== CLIENTE REST BINANCE NATIVO =====
 class BinanceNativeAPI:
     def __init__(self, api_key, api_secret):
         self.api_key = api_key
@@ -371,12 +371,14 @@ class TradingBotUI(BoxLayout):
         while self.bot_rodando:
             try:
                 saldo_geral = exchange.fetch_balance()
+                usdt_livre = saldo_geral['free'].get('USDT', 0.0)
             except Exception as e:
                 self.atualizar_status(f"⚠️ Erro ao carregar saldo: {e}")
                 time.sleep(5)
                 continue
 
             logs_painel = []
+            logs_painel.append(f"💰 Saldo USDT Livre: ${usdt_livre:.2f}\n" + "-"*35)
 
             for SYMBOL in lista_pares:
                 if not self.bot_rodando:
@@ -394,7 +396,6 @@ class TradingBotUI(BoxLayout):
                     
                     ativo = SYMBOL.split("/")[0]
                     qtd = saldo_geral['free'].get(ativo, 0.0)
-                    usdt = saldo_geral['free'].get('USDT', 0.0)
                 except Exception as e:
                     print(f"Erro leitura ({SYMBOL}): {e}")
                     continue
@@ -404,7 +405,7 @@ class TradingBotUI(BoxLayout):
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
 
                 # LÓGICA DE ENTRADA
-                if not em_operacao and usdt >= valor_ordem:
+                if not em_operacao and usdt_livre >= valor_ordem:
                     tempo_ok = (time.time() - estado["ultimo_trade_time"]) > COOLDOWN
                     distancia_ma = (ma9 - ma21) / ma21 * 100
                     tendencia = ma9 > ma21
@@ -507,10 +508,21 @@ class TradingBotUI(BoxLayout):
                         except Exception as e:
                             print(f"Erro ao vender {SYMBOL}: {e}")
 
-                status_pos = f"EM TRADE ({lucro_liquido:+.2f}%)" if em_operacao else "AGUARDANDO"
-                logs_painel.append(f"[{SYMBOL}] Preço: {preco:.2f} | RSI: {rsi:.1f} | {status_pos}")
+                status_pos = f"EM TRADE ({lucro_liquido:+.2f}%)" if em_operacao else "AGUARDANDO ENTRADA"
+                tendencia_txt = "ALTA 🟢" if ma9 > ma21 else "BAIXA 🔴"
 
-            log_texto = f"Última atualização: {datetime.now().strftime('%H:%M:%S')}\n" + "\n".join(logs_painel)
+                # MONTAGEM DO PAINEL DETALHADO POR PAR
+                logs_painel.append(
+                    f"[{SYMBOL}]\n"
+                    f"• Preço: ${preco:.2f} | RSI: {rsi:.1f}\n"
+                    f"• MA9: ${ma9:.2f} | MA21: ${ma21:.2f}\n"
+                    f"• Tendência: {tendencia_txt}\n"
+                    f"• Saldo do Ativo: {qtd:.6f}\n"
+                    f"• Status: {status_pos}\n"
+                    f"-----------------------------------"
+                )
+
+            log_texto = f"🕒 Atualizado: {datetime.now().strftime('%H:%M:%S')}\n" + "\n".join(logs_painel)
             self.atualizar_status(log_texto)
             time.sleep(3)
 
@@ -520,5 +532,3 @@ class TradingApp(App):
 
 if __name__ == "__main__":
     TradingApp().run()
-
-

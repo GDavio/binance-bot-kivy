@@ -64,7 +64,7 @@ jobs:
           ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
           ANDROID_NDK_ROOT: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
         run: |
-          yes | buildozer android debug
+          buildozer -v android debug
 
       - name: Disponibilizar APK para Download
         uses: actions/upload-artifact@v4

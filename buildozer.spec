@@ -6,8 +6,8 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Dependências da sua aplicação
-requirements = python3,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
+# Dependências da aplicação com Python, Cython e Kivy travados em versões estáveis
+requirements = hostpython3==3.11.0,python3==3.11.0,cython==0.29.36,kivy==2.3.0,requests,urllib3,chardet,certifi,idna
 
 orientation = portrait
 fullscreen = 0

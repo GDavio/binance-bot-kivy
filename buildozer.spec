@@ -6,14 +6,14 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
-# Dependências da aplicação com Python, Cython, Kivy e CCXT incluídos
-requirements = hostpython3==3.11.0,python3==3.11.0,cython==0.29.36,kivy==2.3.0,requests,urllib3,chardet,certifi,idna,ccxt
+# Adicionada a dependência cryptography exata necessária pelo CCXT
+requirements = hostpython3==3.11.0,python3==3.11.0,cython==0.29.36,kivy==2.3.0,requests,urllib3,chardet,certifi,idna,cryptography,ccxt
 
 orientation = portrait
 fullscreen = 0
 android.permissions = INTERNET
 
-# Configurações do SDK/NDK suportadas pelo container
+# Configurações do SDK/NDK
 android.api = 33
 android.minapi = 21
 android.ndk = 25b

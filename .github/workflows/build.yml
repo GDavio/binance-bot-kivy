@@ -2,39 +2,34 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Código
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Configurar Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: Instalar Dependências do Sistema
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libreadline-dev libsqlite3-dev libgdbm-dev libdb5.3-dev libbz2-dev libexpat1-dev liblzma-dev tk-dev libffi-dev libssl-dev
+      - name: Instalar Dependências do Sistema para C/C++ e Cython
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev autoconf libtool pkg-config zlib1g-dev ccache git
+          pip install --upgrade pip
+          pip install "cython<3.0.0" buildozer
 
-    - name: Instalar Buildozer e Cython
-      run: |
-        pip install --upgrade pip
-        pip install "buildozer<2.0.0" cython
+      - name: Gerar APK com Buildozer
+        run: |
+          yes | buildozer android debug
 
-    - name: Gerar APK com Aceite de Licença
-      run: |
-        buildozer --profile debug android debug
-
-    - name: Disponibilizar APK para Download
-      uses: actions/upload-artifact@v4
-      with:
-        name: BinanceBot-APK
-        path: bin/*.apk
-        
+      - name: Disponibilizar APK para Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: binance-bot-apk
+          path: bin/*.apk
+          

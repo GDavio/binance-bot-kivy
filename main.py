@@ -1,6 +1,10 @@
 import os
 import time
 import json
+import hmac
+import hashlib
+import urllib.parse
+import urllib.request
 import threading
 from datetime import datetime
 
@@ -15,6 +19,76 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 
+# ===== CLIENTE REST BINANCE NATIVO (SEM DEPENDÊNCIAS C/RUST) =====
+class BinanceNativeAPI:
+    def __init__(self, api_key, api_secret):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.base_url = "https://api.binance.com"
+
+    def _assinar_query(self, params):
+        query_string = urllib.parse.urlencode(params)
+        assinatura = hmac.new(
+            self.api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        return f"{query_string}&signature={assinatura}"
+
+    def _requisicao(self, metodo, endpoint, params=None, assinado=False):
+        if params is None:
+            params = {}
+
+        headers = {"X-MBX-APIKEY": self.api_key} if self.api_key else {}
+
+        if assinado:
+            params["timestamp"] = int(time.time() * 1000)
+            query = self._assinar_query(params)
+            url = f"{self.base_url}{endpoint}?{query}"
+        else:
+            query = urllib.parse.urlencode(params)
+            url = f"{self.base_url}{endpoint}?{query}" if query else f"{self.base_url}{endpoint}"
+
+        req = urllib.request.Request(url, headers=headers, method=metodo)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode('utf-8'))
+
+    def fetch_ohlcv(self, symbol, interval="1m", limit=50):
+        symbol_fmt = symbol.replace("/", "").upper()
+        res = self._requisicao("GET", "/api/v3/klines", {"symbol": symbol_fmt, "interval": interval, "limit": limit})
+        return [[c[0], float(c[1]), float(c[2]), float(c[3]), float(c[4]), float(c[5])] for c in res]
+
+    def fetch_balance(self):
+        res = self._requisicao("GET", "/api/v3/account", assinado=True)
+        saldos = {"free": {}}
+        for b in res.get("balances", []):
+            saldos["free"][b["asset"]] = float(b["free"])
+        return saldos
+
+    def create_market_buy_order(self, symbol, quote_quantity):
+        symbol_fmt = symbol.replace("/", "").upper()
+        params = {
+            "symbol": symbol_fmt,
+            "side": "BUY",
+            "type": "MARKET",
+            "quoteOrderQty": f"{quote_quantity:.2f}"
+        }
+        res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
+        preco = float(res.get("cummulativeQuoteQty", 0)) / float(res.get("executedQty", 1)) if float(res.get("executedQty", 0)) > 0 else 0
+        return {"price": preco, "average": preco}
+
+    def create_market_sell_order(self, symbol, quantity):
+        symbol_fmt = symbol.replace("/", "").upper()
+        params = {
+            "symbol": symbol_fmt,
+            "side": "SELL",
+            "type": "MARKET",
+            "quantity": f"{quantity:.6f}"
+        }
+        res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
+        preco = float(res.get("cummulativeQuoteQty", 0)) / float(res.get("executedQty", 1)) if float(res.get("executedQty", 0)) > 0 else 0
+        return {"price": preco, "average": preco}
+
 # ===== CONFIGURAÇÕES GLOBAIS =====
 DADOS_IA = "dados_ia.json"
 ARQUIVO_ESTADO = "estado_bot.json"
@@ -23,15 +97,6 @@ COOLDOWN = 120
 
 historico_ia = []
 estado_por_par = {}
-
-def salvar_json_atomico(caminho, dados):
-    tmp = f"{caminho}.tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump(dados, f, indent=2)
-        os.replace(tmp, caminho)
-    except Exception as e:
-        print(f"Erro ao salvar {caminho}: {e}")
 
 def carregar_dados_ia():
     global historico_ia
@@ -81,7 +146,6 @@ def calcular_rsi(closes, period=14):
 def media(lista, periodo):
     return sum(lista[-periodo:]) / periodo
 
-# ===== COMPONENTES DE INTERFACE RESPONSIVOS =====
 class CustomLabel(Label):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -117,7 +181,6 @@ class TradingBotUI(BoxLayout):
 
         carregar_dados_ia()
 
-        # Cabeçalho
         self.add_widget(Label(
             text="Bot Trading Binance",
             font_size=sp(20),
@@ -127,7 +190,6 @@ class TradingBotUI(BoxLayout):
             height=dp(36)
         ))
 
-        # Formulário em ScrollView para telas menores
         scroll_form = ScrollView(size_hint=(1, None), height=dp(280))
         form = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
         form.bind(minimum_height=form.setter('height'))
@@ -151,7 +213,6 @@ class TradingBotUI(BoxLayout):
         scroll_form.add_widget(form)
         self.add_widget(scroll_form)
 
-        # Botão Ligar/Desligar
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
             font_size=sp(16),
@@ -163,7 +224,6 @@ class TradingBotUI(BoxLayout):
         self.btn_toggle.bind(on_press=self.toggle_bot)
         self.add_widget(self.btn_toggle)
 
-        # Container do Status (Card de Monitoramento)
         status_card = BoxLayout(orientation='vertical', padding=dp(10))
         with status_card.canvas.before:
             Color(0.1, 0.11, 0.13, 1)
@@ -206,13 +266,6 @@ class TradingBotUI(BoxLayout):
             self.atualizar_status("Robô desligado.")
 
     def loop_principal_bot(self):
-        try:
-            import ccxt
-        except Exception as e:
-            self.atualizar_status(f"Erro ao carregar ccxt: {e}")
-            self.bot_rodando = False
-            return
-
         key = self.api_key.text.strip()
         secret = self.api_secret.text.strip()
         lista_pares = [s.strip().upper() for s in self.symbols.text.split()]
@@ -222,31 +275,13 @@ class TradingBotUI(BoxLayout):
         except ValueError:
             valor_ordem = 10.0
 
-        try:
-            exchange = ccxt.binance({
-                'apiKey': key,
-                'secret': secret,
-                'enableRateLimit': True,
-                'timeout': 30000,
-            })
-            exchange.load_markets()
-        except Exception as e:
-            self.atualizar_status(f"Erro conexão Binance: {e}")
-            self.bot_rodando = False
-            return
+        exchange = BinanceNativeAPI(key, secret)
 
         for s in lista_pares:
             if s not in estado_por_par:
                 estado_por_par[s] = {
                     "preco_entrada": 0, "topo_preco": 0, "ultimo_trade_time": 0,
-                    "tipo_operacao": "", "tipo_entrada": "", "entrada_rsi": 0,
-                    "entrada_ma9": 0, "entrada_ma21": 0, "tempo_entrada": 0,
-                    "wins": 0, "losses": 0,
-                    "estrategias": {
-                        "pullback": {"wins": 0, "losses": 0},
-                        "continuidade": {"wins": 0, "losses": 0},
-                        "rompimento": {"wins": 0, "losses": 0}
-                    }
+                    "tipo_entrada": ""
                 }
 
         while self.bot_rodando:
@@ -295,7 +330,6 @@ class TradingBotUI(BoxLayout):
                 # LÓGICA DE COMPRA
                 if not em_operacao and usdt >= valor_ordem:
                     tempo_ok = (time.time() - estado["ultimo_trade_time"]) > COOLDOWN
-                    distancia_ma = (ma9 - ma21) / ma21 * 100
                     tendencia = ma9 > ma21
 
                     pullback = (tendencia and preco <= ma9 * 1.003 and preco > ma9 and rsi < 55)
@@ -306,25 +340,17 @@ class TradingBotUI(BoxLayout):
 
                     if (pullback or continuidade) and volatilidade > 0.15 and tempo_ok and prob > 0.50:
                         try:
-                            qtd_raw = valor_ordem / preco
-                            quantidade = float(exchange.amount_to_precision(SYMBOL, qtd_raw))
-                            order = exchange.create_market_buy_order(SYMBOL, quantidade)
-                            preco_executado = order.get('average') or order.get('price') or preco
+                            order = exchange.create_market_buy_order(SYMBOL, valor_ordem)
+                            preco_executado = order.get('price') or preco
 
                             estado["preco_entrada"] = preco_executado
                             estado["topo_preco"] = preco_executado
-                            estado["tempo_entrada"] = time.time()
                             estado["ultimo_trade_time"] = time.time()
                             estado["tipo_entrada"] = tipo_entrada
-                            estado["entrada_rsi"] = rsi
-                            estado["entrada_ma9"] = ma9
-                            estado["entrada_ma21"] = ma21
-                            estado["entrada_distancia_ma"] = distancia_ma
-                            estado["entrada_volatilidade"] = volatilidade
                         except Exception as e:
                             print(f"Erro ao comprar {SYMBOL}: {e}")
 
-                # LÓGICA DE VENDA / TRAILING STOP
+                # LÓGICA DE VENDA
                 if em_operacao and estado["preco_entrada"] > 0:
                     lucro_bruto = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
                     lucro_liquido = lucro_bruto - (TAXA_CORRETORA * 2 * 100)
@@ -340,18 +366,7 @@ class TradingBotUI(BoxLayout):
 
                     if vender:
                         try:
-                            qtd_venda = float(exchange.amount_to_precision(SYMBOL, qtd))
-                            order = exchange.create_market_sell_order(SYMBOL, qtd_venda)
-                            preco_saida = order.get('average') or order.get('price') or preco
-                            lucro_real_liquido = (((preco_saida - estado["preco_entrada"]) / estado["preco_entrada"]) * 100) - (TAXA_CORRETORA * 200)
-
-                            historico_ia.append({
-                                "tipo_entrada": estado.get("tipo_entrada", "desconhecido"),
-                                "rsi": estado["entrada_rsi"],
-                                "volatilidade": estado["entrada_volatilidade"],
-                                "distancia_ma": estado["entrada_distancia_ma"],
-                                "resultado": lucro_real_liquido
-                            })
+                            order = exchange.create_market_sell_order(SYMBOL, qtd)
                             estado["preco_entrada"] = 0
                         except Exception as e:
                             print(f"Erro ao vender {SYMBOL}: {e}")

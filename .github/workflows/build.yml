@@ -40,6 +40,10 @@ jobs:
           pip install "cython<3.0.0" buildozer
 
       - name: Gerar APK com Buildozer
+        env:
+          # Remove o NDK pré-instalado pelo runner do GitHub para evitar conflitos
+          ANDROID_NDK_HOME: ""
+          ANDROID_NDK_ROOT: ""
         run: |
           buildozer android debug
 

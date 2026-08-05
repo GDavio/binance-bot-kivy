@@ -67,4 +67,4 @@ class BinanceApp(App):
 
 if __name__ == '__main__':
     BinanceApp().run()
-        
+    

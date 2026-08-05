@@ -3,29 +3,45 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout do Código
+        uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
+      - name: Configurar Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instalar Dependências do Sistema para C/C++ e Cython
+      - name: Instalar Dependências do Sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev autoconf libtool pkg-config zlib1g-dev ccache git
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            libffi-dev \
+            python3-dev \
+            autoconf \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            ccache \
+            git \
+            openjdk-17-jdk
+
+      - name: Instalar Buildozer e Cython
+        run: |
           pip install --upgrade pip
           pip install "cython<3.0.0" buildozer
 
       - name: Gerar APK com Buildozer
         run: |
-          yes | buildozer android debug
+          buildozer android debug
 
       - name: Disponibilizar APK para Download
         uses: actions/upload-artifact@v4

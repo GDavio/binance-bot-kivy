@@ -411,7 +411,8 @@ class TradingBotUI(BoxLayout):
                     tendencia = ma9 > ma21
                     tendencia_forte = distancia_ma > 0.02
 
-                    pullback = (tendencia and preco <= ma9 * 1.003 and preco > ma9 and rsi < 55 and rsi > rsi_anterior and estrategia_valida(estado, "pullback"))
+                    # Permite que o preço fique até 0.2% abaixo da MA9, desde que continue acima da MA21
+                    pullback = (tendencia and preco >= ma9 * 0.998 and preco >= ma21 and rsi < 58 and rsi > rsi_anterior and estrategia_valida(estado, "pullback"))
                     continuidade = (tendencia and preco > ma9 and 52 < rsi < 65 and rsi > rsi_anterior and closes[-1] > closes[-2] and (distancia_ma > 0.05 or (distancia_ma > 0.003 and closes[-1] > closes[-2])) and estrategia_valida(estado, "continuidade"))
                     rompimento = (tendencia_forte and preco >= max(closes[-3:]) and closes[-1] > closes[-2] and 55 < rsi < 72 and rsi > rsi_anterior and preco > ma9 and (preco - closes[-3]) / closes[-3] * 100 > 0.03 and estrategia_valida(estado, "rompimento"))
 

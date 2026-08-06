@@ -20,6 +20,46 @@ from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
 
+# ===== ARQUIVOS DE PERSISTÊNCIA =====
+ARQUIVO_CONFIG = "config_bot.json"
+ARQUIVO_ESTADO = "estado_bot.json"
+ARQUIVO_RELATORIO = "relatorio_bot.txt"
+DADOS_IA = "dados_ia.json"
+
+TAXA_CORRETORA = 0.001
+TEMPO_MAXIMO_TRADE = 7200
+COOLDOWN = 120
+
+historico_ia = []
+estado_por_par = {}
+
+def salvar_json_atomico(caminho, dados):
+    tmp = f"{caminho}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(dados, f, indent=2)
+        os.replace(tmp, caminho)
+    except Exception as e:
+        print(f"Erro ao salvar {caminho}: {e}")
+
+def carregar_config():
+    if os.path.exists(ARQUIVO_CONFIG):
+        try:
+            with open(ARQUIVO_CONFIG, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def salvar_config(api_key, api_secret, symbols, valor_usdt):
+    dados = {
+        "api_key": api_key,
+        "api_secret": api_secret,
+        "symbols": symbols,
+        "valor_usdt": valor_usdt
+    }
+    salvar_json_atomico(ARQUIVO_CONFIG, dados)
+
 # ===== CLIENTE REST BINANCE NATIVO =====
 class BinanceNativeAPI:
     def __init__(self, api_key, api_secret):
@@ -94,27 +134,7 @@ class BinanceNativeAPI:
         preco = float(res.get("cummulativeQuoteQty", 0)) / float(res.get("executedQty", 1)) if float(res.get("executedQty", 0)) > 0 else 0
         return {"price": preco, "average": preco}
 
-# ===== CONFIGURAÇÕES E UTILITÁRIOS ATÔMICOS =====
-TAXA_CORRETORA = 0.001
-TEMPO_MAXIMO_TRADE = 7200
-COOLDOWN = 120
-
-ARQUIVO_ESTADO = "estado_bot.json"
-ARQUIVO_RELATORIO = "relatorio_bot.txt"
-DADOS_IA = "dados_ia.json"
-
-historico_ia = []
-estado_por_par = {}
-
-def salvar_json_atomico(caminho, dados):
-    tmp = f"{caminho}.tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump(dados, f, indent=2)
-        os.replace(tmp, caminho)
-    except Exception as e:
-        print(f"Erro ao salvar {caminho}: {e}")
-
+# ===== UTILITÁRIOS E ESTRATÉGIAS =====
 def carregar_dados_ia():
     global historico_ia
     if os.path.exists(DADOS_IA):
@@ -257,6 +277,7 @@ class TradingBotUI(BoxLayout):
 
         carregar_estado()
         carregar_dados_ia()
+        config = carregar_config()
 
         self.add_widget(Label(
             text="Bot Trading Binance",
@@ -272,19 +293,19 @@ class TradingBotUI(BoxLayout):
         form.bind(minimum_height=form.setter('height'))
 
         form.add_widget(CustomLabel(text="Binance API Key"))
-        self.api_key = CustomInput(hint_text="Insira sua API Key", multiline=False)
+        self.api_key = CustomInput(text=config.get("api_key", ""), hint_text="Insira sua API Key", multiline=False)
         form.add_widget(self.api_key)
 
         form.add_widget(CustomLabel(text="Binance Secret Key"))
-        self.api_secret = CustomInput(hint_text="Insira sua Secret Key", password=True, multiline=False)
+        self.api_secret = CustomInput(text=config.get("api_secret", ""), hint_text="Insira sua Secret Key", password=True, multiline=False)
         form.add_widget(self.api_secret)
 
         form.add_widget(CustomLabel(text="Pares de Moedas"))
-        self.symbols = CustomInput(text="ETH/USDT BTC/USDT", multiline=False)
+        self.symbols = CustomInput(text=config.get("symbols", "ETH/USDT BTC/USDT"), multiline=False)
         form.add_widget(self.symbols)
 
         form.add_widget(CustomLabel(text="Valor por Ordem (USDT)"))
-        self.valor_usdt = CustomInput(text="10", multiline=False)
+        self.valor_usdt = CustomInput(text=config.get("valor_usdt", "10"), multiline=False)
         form.add_widget(self.valor_usdt)
 
         scroll_form.add_widget(form)
@@ -332,6 +353,13 @@ class TradingBotUI(BoxLayout):
 
     def toggle_bot(self, instance):
         if not self.bot_rodando:
+            # Salva os dados de configuração assim que clica em Ligar
+            salvar_config(
+                self.api_key.text.strip(),
+                self.api_secret.text.strip(),
+                self.symbols.text.strip(),
+                self.valor_usdt.text.strip()
+            )
             self.bot_rodando = True
             self.btn_toggle.text = "DESLIGAR ROBÔ"
             self.btn_toggle.background_color = (0.85, 0.2, 0.2, 1)
@@ -404,14 +432,13 @@ class TradingBotUI(BoxLayout):
                 em_operacao = qtd > 0.0001
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
 
-                # LÓGICA DE ENTRADA
+                # LÓGICA DE ENTRADA (AJUSTADA PARA PULLBACK)
                 if not em_operacao and usdt_livre >= valor_ordem:
                     tempo_ok = (time.time() - estado["ultimo_trade_time"]) > COOLDOWN
                     distancia_ma = (ma9 - ma21) / ma21 * 100
                     tendencia = ma9 > ma21
                     tendencia_forte = distancia_ma > 0.02
 
-                    # Permite que o preço fique até 0.2% abaixo da MA9, desde que continue acima da MA21
                     pullback = (tendencia and preco >= ma9 * 0.998 and preco >= ma21 and rsi < 58 and rsi > rsi_anterior and estrategia_valida(estado, "pullback"))
                     continuidade = (tendencia and preco > ma9 and 52 < rsi < 65 and rsi > rsi_anterior and closes[-1] > closes[-2] and (distancia_ma > 0.05 or (distancia_ma > 0.003 and closes[-1] > closes[-2])) and estrategia_valida(estado, "continuidade"))
                     rompimento = (tendencia_forte and preco >= max(closes[-3:]) and closes[-1] > closes[-2] and 55 < rsi < 72 and rsi > rsi_anterior and preco > ma9 and (preco - closes[-3]) / closes[-3] * 100 > 0.03 and estrategia_valida(estado, "rompimento"))
@@ -512,7 +539,6 @@ class TradingBotUI(BoxLayout):
                 status_pos = f"EM TRADE ({lucro_liquido:+.2f}%)" if em_operacao else "AGUARDANDO ENTRADA"
                 tendencia_txt = "ALTA 🟢" if ma9 > ma21 else "BAIXA 🔴"
 
-                # MONTAGEM DO PAINEL DETALHADO POR PAR
                 logs_painel.append(
                     f"[{SYMBOL}]\n"
                     f"• Preço: ${preco:.2f} | RSI: {rsi:.1f}\n"

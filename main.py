@@ -19,6 +19,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
+from kivy.utils import platform
 
 # ===== ARQUIVOS DE PERSISTÊNCIA =====
 ARQUIVO_CONFIG = "config_bot.json"
@@ -29,6 +30,7 @@ DADOS_IA = "dados_ia.json"
 TAXA_CORRETORA = 0.001
 TEMPO_MAXIMO_TRADE = 7200
 COOLDOWN = 120
+AMOSTRAGEM_MINIMA_IA = 30  # Quantidade de trades para a IA começar a filtrar
 
 historico_ia = []
 estado_por_par = {}
@@ -59,6 +61,36 @@ def salvar_config(api_key, api_secret, symbols, valor_usdt):
         "valor_usdt": valor_usdt
     }
     salvar_json_atomico(ARQUIVO_CONFIG, dados)
+
+# ===== RECURSOS NATIVOS ANDROID (WAKELOCK E SERVIÇO) =====
+def adquirir_wake_lock():
+    """Impede que o Android suspenda a CPU quando a tela apaga."""
+    if platform == 'android':
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            Context = autoclass('android.content.Context')
+            PowerManager = autoclass('android.os.PowerManager')
+            
+            activity = PythonActivity.mActivity
+            power_manager = activity.getSystemService(Context.POWER_SERVICE)
+            
+            wake_lock = power_manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BotTrading::WakeLock")
+            wake_lock.acquire()
+            print("WakeLock adquirido com sucesso.")
+            return wake_lock
+        except Exception as e:
+            print(f"Erro ao adquirir WakeLock: {e}")
+    return None
+
+def liberar_wake_lock(wake_lock):
+    if wake_lock and platform == 'android':
+        try:
+            if wake_lock.isHeld():
+                wake_lock.release()
+                print("WakeLock liberado.")
+        except Exception as e:
+            print(f"Erro ao liberar WakeLock: {e}")
 
 # ===== CLIENTE REST BINANCE NATIVO =====
 class BinanceNativeAPI:
@@ -160,8 +192,10 @@ def salvar_estado():
     salvar_json_atomico(ARQUIVO_ESTADO, estado_por_par)
 
 def prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada):
-    if len(historico_ia) < 20:
-        return 0.50
+    # FASE DE AQUECIMENTO: Se a amostra for menor que 30 trades, não bloqueia entradas
+    if len(historico_ia) < AMOSTRAGEM_MINIMA_IA:
+        return 1.0
+
     peso_total = 0
     score = 0
     for d in historico_ia:
@@ -181,6 +215,7 @@ def prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada):
             continue
         peso_total += peso
         score += peso * (1.0 if d["resultado"] > 0 else 0.0)
+
     return max(0, min(1, score / peso_total)) if peso_total >= 1 else 0.5
 
 def calcular_rsi(closes, period=14):
@@ -274,6 +309,7 @@ class TradingBotUI(BoxLayout):
         self.padding = [dp(16), dp(16), dp(16), dp(16)]
         self.spacing = dp(10)
         self.bot_rodando = False
+        self.wake_lock = None
 
         carregar_estado()
         carregar_dados_ia()
@@ -353,19 +389,20 @@ class TradingBotUI(BoxLayout):
 
     def toggle_bot(self, instance):
         if not self.bot_rodando:
-            # Salva os dados de configuração assim que clica em Ligar
             salvar_config(
                 self.api_key.text.strip(),
                 self.api_secret.text.strip(),
                 self.symbols.text.strip(),
                 self.valor_usdt.text.strip()
             )
+            self.wake_lock = adquirir_wake_lock()
             self.bot_rodando = True
             self.btn_toggle.text = "DESLIGAR ROBÔ"
             self.btn_toggle.background_color = (0.85, 0.2, 0.2, 1)
             threading.Thread(target=self.loop_principal_bot, daemon=True).start()
         else:
             self.bot_rodando = False
+            liberar_wake_lock(self.wake_lock)
             self.btn_toggle.text = "LIGAR ROBÔ"
             self.btn_toggle.background_color = (0, 0.7, 0.3, 1)
             self.atualizar_status("Robô desligado.")
@@ -405,8 +442,11 @@ class TradingBotUI(BoxLayout):
                 time.sleep(5)
                 continue
 
+            amostras_atuais = len(historico_ia)
+            status_ia = f"Coletando Amostras ({amostras_atuais}/{AMOSTRAGEM_MINIMA_IA})" if amostras_atuais < AMOSTRAGEM_MINIMA_IA else "IA Ativa (Filtrando)"
+
             logs_painel = []
-            logs_painel.append(f"💰 Saldo USDT Livre: ${usdt_livre:.2f}\n" + "-"*35)
+            logs_painel.append(f"💰 Saldo USDT Livre: ${usdt_livre:.2f} | IA: {status_ia}\n" + "-"*35)
 
             for SYMBOL in lista_pares:
                 if not self.bot_rodando:
@@ -432,7 +472,7 @@ class TradingBotUI(BoxLayout):
                 em_operacao = qtd > 0.0001
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
 
-                # LÓGICA DE ENTRADA (AJUSTADA PARA PULLBACK)
+                # LÓGICA DE ENTRADA (MANTÉM CONFIRMAÇÃO DO RSI)
                 if not em_operacao and usdt_livre >= valor_ordem:
                     tempo_ok = (time.time() - estado["ultimo_trade_time"]) > COOLDOWN
                     distancia_ma = (ma9 - ma21) / ma21 * 100
@@ -446,7 +486,10 @@ class TradingBotUI(BoxLayout):
                     tipo_entrada = "pullback" if pullback else "continuidade" if continuidade else "rompimento" if rompimento else "nenhum"
                     prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                    if (pullback or continuidade or rompimento) and volatilidade > 0.15 and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
+                    # Regra de permissão da IA: passa direto se estiver na fase de amostragem
+                    ia_permissao = True if len(historico_ia) < AMOSTRAGEM_MINIMA_IA else prob >= 0.52
+
+                    if (pullback or continuidade or rompimento) and volatilidade > 0.15 and tempo_ok and ia_permissao:
                         try:
                             order = exchange.create_market_buy_order(SYMBOL, valor_ordem)
                             preco_executado = order.get('price') or preco

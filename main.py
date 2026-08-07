@@ -21,10 +21,9 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.uix.accordion import Accordion, AccordionItem
 from kivy.utils import platform
 
-# --- Android / Pyjnius Integration ---
+# --- Android Integration ---
 if platform == 'android':
     from jnius import autoclass
     PythonActivity = autoclass('org.kivy.android.PythonActivity')
@@ -356,58 +355,57 @@ def carregar_config():
     return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT LTC/USDT", "valor_usdt": "12"}
 
 # ==========================================
-# INTERFACE KIVY COMPLETA
+# INTERFACE KIVY FIXA E CLARA
 # ==========================================
 
 class BotTradingApp(App):
     def build(self):
-        Window.clearcolor = (0.05, 0.05, 0.07, 1)
+        Window.clearcolor = (0.07, 0.07, 0.09, 1)
         self.bot_rodando = False
         self.wake_lock = None
 
         carregar_estado()
         carregar_dados_ia()
 
-        root = BoxLayout(orientation='vertical', padding=8, spacing=6)
+        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
 
-        # Header
+        # Header Fixo
         lbl_titulo = Label(
             text="Bot Trading Binance",
             font_size='18sp',
             bold=True,
-            size_hint_y=None,
-            height=30,
+            size_hint=(1, 0.05),
             color=(1, 1, 1, 1)
         )
         root.add_widget(lbl_titulo)
 
         config = carregar_config()
 
-        # Painel Configurações Ocultável (Para não comer tela)
-        self.config_box = BoxLayout(orientation='vertical', spacing=4, size_hint_y=None, height=0)
-        self.config_box.opacity = 0
-        
-        self.api_key = TextInput(text=config.get("api_key", ""), hint_text="API Key", multiline=False, password=True, size_hint_y=None, height=35)
-        self.api_secret = TextInput(text=config.get("api_secret", ""), hint_text="Secret Key", multiline=False, password=True, size_hint_y=None, height=35)
-        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), hint_text="Pares", multiline=False, size_hint_y=None, height=35)
-        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), hint_text="Valor Ordem (USDT)", multiline=False, size_hint_y=None, height=35)
+        # Formulário Fixo Visível (35% da tela)
+        form_layout = GridLayout(cols=1, spacing=6, size_hint=(1, 0.38))
 
-        self.config_box.add_widget(self.api_key)
-        self.config_box.add_widget(self.api_secret)
-        self.config_box.add_widget(self.symbols)
-        self.config_box.add_widget(self.valor_usdt)
+        form_layout.add_widget(Label(text="Binance API Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
+        self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.api_key)
 
-        self.btn_toggle_config = Button(text="⚙️ Configurações da API / Parâmetros", size_hint_y=None, height=30, background_color=(0.2, 0.2, 0.25, 1))
-        self.btn_toggle_config.bind(on_press=self.toggle_config_panel)
-        
-        root.add_widget(self.btn_toggle_config)
-        root.add_widget(self.config_box)
+        form_layout.add_widget(Label(text="Binance Secret Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
+        self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.api_secret)
 
-        # Botão Bot Ligar/Desligar
+        form_layout.add_widget(Label(text="Pares (separados por espaço):", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
+        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), multiline=False, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.symbols)
+
+        form_layout.add_widget(Label(text="Valor por Ordem (USDT):", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
+        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), multiline=False, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.valor_usdt)
+
+        root.add_widget(form_layout)
+
+        # Botão Ligar/Desligar Fixo
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
-            size_hint_y=None,
-            height=45,
+            size_hint=(1, 0.08),
             bold=True,
             background_normal='',
             background_color=(0, 0.7, 0.3, 1)
@@ -415,16 +413,14 @@ class BotTradingApp(App):
         self.btn_toggle.bind(on_press=self.toggle_bot)
         root.add_widget(self.btn_toggle)
 
-        # Área de Logs Completa (Monospace)
-        scroll_logs = ScrollView(size_hint=(1, 1))
+        # Container de Logs (49% restante da tela)
+        scroll_logs = ScrollView(size_hint=(1, 0.49))
         self.lbl_logs = Label(
-            text="[SISTEMA] Aguardando inicialização...\n",
+            text="[SISTEMA] Preencha as chaves acima e clique em LIGAR ROBÔ.\n",
             size_hint_y=None,
             font_size='11sp',
-            font_name='Roboto',
             halign='left',
             valign='top',
-            markup=True,
             color=(0.9, 0.9, 0.9, 1)
         )
         self.lbl_logs.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
@@ -434,20 +430,11 @@ class BotTradingApp(App):
 
         return root
 
-    def toggle_config_panel(self, instance):
-        if self.config_box.height == 0:
-            self.config_box.height = 150
-            self.config_box.opacity = 1
-        else:
-            self.config_box.height = 0
-            self.config_box.opacity = 0
-
     def atualizar_status(self, texto):
         def _update(dt):
             self.lbl_logs.text += f"{texto}\n"
-            # Limita tamanho da string de logs para não estourar memória do Android
-            if len(self.lbl_logs.text) > 20000:
-                self.lbl_logs.text = self.lbl_logs.text[-15000:]
+            if len(self.lbl_logs.text) > 15000:
+                self.lbl_logs.text = self.lbl_logs.text[-10000:]
         Clock.schedule_once(_update)
 
     def toggle_bot(self, instance):
@@ -458,10 +445,6 @@ class BotTradingApp(App):
                 self.symbols.text.strip(),
                 self.valor_usdt.text.strip()
             )
-            # Oculta painel de config ao ligar para maximizar espaço
-            self.config_box.height = 0
-            self.config_box.opacity = 0
-
             self.wake_lock = adquirir_wake_lock()
             iniciar_foreground_service()
 
@@ -580,7 +563,6 @@ class BotTradingApp(App):
 
                 prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                # --- FORMATANDO EXIBIÇÃO NO PADRÃO COMPLETO ---
                 status_posicao = f"🔒 POSIÇÃO ABERTA ({estado['preco_entrada']:.2f})" if em_operacao else "⏳ SEM POSIÇÃO"
                 
                 bloco_log = (

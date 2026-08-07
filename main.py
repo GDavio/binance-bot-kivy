@@ -16,11 +16,11 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
-from kivy.graphics import Color, Rectangle
 from kivy.utils import platform
 
 # --- Android / Pyjnius Integration ---
@@ -39,7 +39,6 @@ CONFIG_FILE = "config_bot.json"
 ARQUIVO_ESTADO = "estado_bot.json"
 DADOS_IA = "dados_ia.json"
 
-# Salva o relatório diretamente na pasta de Downloads acessível do Android
 if platform == 'android':
     ARQUIVO_RELATORIO = "/storage/emulated/0/Download/relatorio_bot.txt"
 else:
@@ -59,19 +58,17 @@ def adquirir_wake_lock():
             PowerManager.PARTIAL_WAKE_LOCK, "BotTrading::WakeLock"
         )
         wake_lock.acquire()
-        print("⚡ WakeLock adquirido com sucesso.")
         return wake_lock
     except Exception as e:
-        print(f"⚠️ Erro ao adquirir WakeLock: {e}")
+        print(f"Erro ao adquirir WakeLock: {e}")
         return None
 
 def liberar_wake_lock(wake_lock):
     if wake_lock and wake_lock.isHeld():
         try:
             wake_lock.release()
-            print("⚡ WakeLock liberado.")
         except Exception as e:
-            print(f"⚠️ Erro ao liberar WakeLock: {e}")
+            print(f"Erro ao liberar WakeLock: {e}")
 
 def iniciar_foreground_service():
     if platform != 'android':
@@ -102,9 +99,8 @@ def iniciar_foreground_service():
 
         notification = builder.build()
         activity.startForeground(1001, notification)
-        print("🔔 Foreground Service iniciado com sucesso.")
     except Exception as e:
-        print(f"⚠️ Erro ao iniciar Foreground Service: {e}")
+        print(f"Erro ao iniciar Foreground Service: {e}")
 
 def parar_foreground_service():
     if platform != 'android':
@@ -112,12 +108,11 @@ def parar_foreground_service():
     try:
         activity = PythonActivity.mActivity
         activity.stopForeground(True)
-        print("🔔 Foreground Service parado.")
     except Exception as e:
-        print(f"⚠️ Erro ao parar Foreground Service: {e}")
+        print(f"Erro ao parar Foreground Service: {e}")
 
 # ==========================================
-# CLIENTE NATIVO DA API BINANCE (COM RETRY)
+# CLIENTE NATIVO DA API BINANCE (SSL CORRIGIDO)
 # ==========================================
 
 class BinanceNativeAPI:
@@ -125,17 +120,18 @@ class BinanceNativeAPI:
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
         self.base_url = "https://api.binance.com"
+        
+        # Ignora verificação estrita de certificado SSL para rodar no Android sem falhar
         self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = False
+        self.ssl_context.verify_mode = ssl.CERT_NONE
 
     def _requisicao(self, metodo, endpoint, params=None, assinado=False):
         if params is None:
             params = {}
 
-        api_key = self.api_key.strip()
-        api_secret = self.api_secret.strip()
-
         headers = {
-            "X-MBX-APIKEY": api_key,
+            "X-MBX-APIKEY": self.api_key,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
 
@@ -143,7 +139,7 @@ class BinanceNativeAPI:
             params["timestamp"] = int(time.time() * 1000)
             query_string = urllib.parse.urlencode(params)
             assinatura = hmac.new(
-                api_secret.encode('utf-8'),
+                self.api_secret.encode('utf-8'),
                 query_string.encode('utf-8'),
                 hashlib.sha256
             ).hexdigest()
@@ -152,7 +148,6 @@ class BinanceNativeAPI:
             query = urllib.parse.urlencode(params)
             url = f"{self.base_url}{endpoint}?{query}" if query else f"{self.base_url}{endpoint}"
 
-        # 3 tentativas para suportar oscilações de reconexão de rede
         for tentativa in range(3):
             try:
                 req = urllib.request.Request(url, headers=headers, method=metodo)
@@ -179,7 +174,7 @@ class BinanceNativeAPI:
             "symbol": symbol_fmt,
             "side": "BUY",
             "type": "MARKET",
-            "quantity": f"{quantity:.6f}"
+            "quantity": f"{quantity:.4f}"
         }
         res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
         fills = res.get('fills', [])
@@ -196,7 +191,7 @@ class BinanceNativeAPI:
             "symbol": symbol_fmt,
             "side": "SELL",
             "type": "MARKET",
-            "quantity": f"{quantity:.6f}"
+            "quantity": f"{quantity:.4f}"
         }
         res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
         fills = res.get('fills', [])
@@ -362,10 +357,10 @@ def carregar_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT", "valor_usdt": "10"}
+    return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT LTC/USDT", "valor_usdt": "12"}
 
 # ==========================================
-# INTERFACE KIVY MOBILE
+# INTERFACE KIVY MOBILE (LAYOUT REESTRUTURADO)
 # ==========================================
 
 class BotTradingApp(App):
@@ -377,65 +372,73 @@ class BotTradingApp(App):
         carregar_estado()
         carregar_dados_ia()
 
-        layout = BoxLayout(orientation='vertical', padding=15, spacing=10)
+        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
 
-        # Título
+        # Título fixo
         lbl_titulo = Label(
             text="Bot Trading Binance",
-            font_size='22sp',
+            font_size='20sp',
             bold=True,
             size_hint_y=None,
-            height=40,
+            height=35,
             color=(1, 1, 1, 1)
         )
-        layout.add_widget(lbl_titulo)
+        root.add_widget(lbl_titulo)
 
-        # Inputs de Configuração
         config = carregar_config()
 
-        layout.add_widget(Label(text="Binance API Key", size_hint_y=None, height=20, halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint_y=None, height=40, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        layout.add_widget(self.api_key)
+        # Formulário de Entradas dentro de um ScrollView
+        form_scroll = ScrollView(size_hint=(1, None), height=260)
+        form_layout = GridLayout(cols=1, spacing=4, size_hint_y=None)
+        form_layout.bind(minimum_height=form_layout.setter('height'))
 
-        layout.add_widget(Label(text="Binance Secret Key", size_hint_y=None, height=20, halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint_y=None, height=40, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        layout.add_widget(self.api_secret)
+        form_layout.add_widget(Label(text="Binance API Key", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
+        self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.api_key)
 
-        layout.add_widget(Label(text="Pares de Moedas (separados por espaço)", size_hint_y=None, height=20, halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT"), multiline=False, size_hint_y=None, height=40, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        layout.add_widget(self.symbols)
+        form_layout.add_widget(Label(text="Binance Secret Key", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
+        self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.api_secret)
 
-        layout.add_widget(Label(text="Valor por Ordem (USDT)", size_hint_y=None, height=20, halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.valor_usdt = TextInput(text=config.get("valor_usdt", "10"), multiline=False, size_hint_y=None, height=40, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        layout.add_widget(self.valor_usdt)
+        form_layout.add_widget(Label(text="Pares (separados por espaço)", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
+        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), multiline=False, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.symbols)
 
-        # Botão Ligar/Desligar
+        form_layout.add_widget(Label(text="Valor por Ordem (USDT)", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
+        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), multiline=False, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
+        form_layout.add_widget(self.valor_usdt)
+
+        form_scroll.add_widget(form_layout)
+        root.add_widget(form_scroll)
+
+        # Botão Ligar/Desligar Fixo
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
             size_hint_y=None,
-            height=50,
+            height=45,
             bold=True,
             background_normal='',
             background_color=(0, 0.7, 0.3, 1)
         )
         self.btn_toggle.bind(on_press=self.toggle_bot)
-        layout.add_widget(self.btn_toggle)
+        root.add_widget(self.btn_toggle)
 
-        # Log Terminal
-        scroll = ScrollView(size_hint=(1, 1))
+        # Terminal de Logs Ocupando o restante da tela
+        scroll_logs = ScrollView(size_hint=(1, 1))
         self.lbl_logs = Label(
             text="Aguardando inicialização...\n",
             size_hint_y=None,
+            font_size='13sp',
             halign='left',
             valign='top',
             color=(0.8, 0.8, 0.8, 1)
         )
         self.lbl_logs.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
         self.lbl_logs.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
-        scroll.add_widget(self.lbl_logs)
-        layout.add_widget(scroll)
+        scroll_logs.add_widget(self.lbl_logs)
+        root.add_widget(scroll_logs)
 
-        return layout
+        return root
 
     def atualizar_status(self, texto):
         def _update(dt):
@@ -470,7 +473,7 @@ class BotTradingApp(App):
 
     def loop_principal_bot(self):
         symbols_list = [s.strip().upper() for s in self.symbols.text.strip().split() if s.strip()]
-        valor_ordem = float(self.valor_usdt.text.strip() or 10)
+        valor_ordem = float(self.valor_usdt.text.strip() or 12)
         cooldown = 120
 
         exchange = BinanceNativeAPI(self.api_key.text, self.api_secret.text)
@@ -541,27 +544,27 @@ class BotTradingApp(App):
                     pullback = (
                         tendencia and
                         preco <= ma9 * 1.003 and preco > ma9 and
-                        rsi < 55 and
+                        rsi < 62 and
                         rsi > rsi_anterior
                     )
 
                     continuidade = (
                         tendencia and
                         preco > ma9 and
-                        52 < rsi < 65 and
+                        52 < rsi < 68 and
                         rsi > rsi_anterior and
                         closes[-1] > closes[-2] and
-                        (distancia_ma > 0.05 or (distancia_ma > 0.003 and closes[-1] > closes[-2]))
+                        (distancia_ma > 0.03 or (distancia_ma > 0.001 and closes[-1] > closes[-2]))
                     )
 
                     rompimento = (
                         tendencia_forte and
                         preco >= max(closes[-3:]) and
                         closes[-1] > closes[-2] and
-                        55 < rsi < 72 and
+                        55 < rsi < 75 and
                         rsi > rsi_anterior and
                         preco > ma9 and
-                        (preco - closes[-3]) / closes[-3] * 100 > 0.03
+                        (preco - closes[-3]) / closes[-3] * 100 > 0.01
                     )
 
                     tipo_entrada = "nenhum"
@@ -574,12 +577,12 @@ class BotTradingApp(App):
 
                     prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                    entrada_valida = (pullback or continuidade or rompimento) and volatilidade > 0.15
+                    entrada_valida = (pullback or continuidade or rompimento) and volatilidade > 0.10
 
                     if entrada_valida and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
                         self.atualizar_status(f"🚀 ENTRADA CONFIRMADA ({tipo_entrada.upper()}) | Prob IA: {prob:.2f}")
                         try:
-                            quantidade = valor_ordem / preco
+                            quantidade = round(valor_ordem / preco, 4)
                             order = exchange.create_market_buy_order(SYMBOL, quantidade)
 
                             estado["preco_entrada"] = order.get('average') or preco
@@ -598,9 +601,9 @@ class BotTradingApp(App):
                             salvar_estado()
                             self.atualizar_status(f"✅ COMPRA EXECUTADA em {SYMBOL} @ {estado['preco_entrada']:.2f}")
                         except Exception as e:
-                            self.atualizar_status(f"⚠️ Erro ao comprar {SYMBOL}: {e}")
+                            self.atualizar_status(f"❌ ERRO AO COMPRAR {SYMBOL}: {e}")
 
-                # --- LÓGICA DE SAÍDA E TRAILING STOP ESCALONADO ---
+                # --- LÓGICA DE SAÍDA E TRAILING STOP ---
                 if em_operacao:
                     lucro = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
 
@@ -668,7 +671,6 @@ class BotTradingApp(App):
                             })
                             salvar_dados_ia()
 
-                            # Reseta estado do par
                             estado["preco_entrada"] = 0
                             estado["topo_preco"] = 0
                             estado["entrada_rsi"] = 0

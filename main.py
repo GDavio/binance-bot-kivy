@@ -115,6 +115,19 @@ def parar_foreground_service():
 # CLIENTE NATIVO DA API BINANCE (SSL FIX)
 # ==========================================
 
+def formatar_quantidade(quantidade, preco):
+    """Ajusta a precisão da quantidade de acordo com o preço da moeda para evitar HTTP 400 Bad Request."""
+    if preco > 10000:
+        return f"{quantidade:.5f}"
+    elif preco > 1000:
+        return f"{quantidade:.4f}"
+    elif preco > 100:
+        return f"{quantidade:.3f}"
+    elif preco > 1:
+        return f"{quantidade:.2f}"
+    else:
+        return f"{int(quantidade)}"
+
 class BinanceNativeAPI:
     def __init__(self, api_key="", api_secret=""):
         self.api_key = api_key.strip()
@@ -152,6 +165,9 @@ class BinanceNativeAPI:
                 req = urllib.request.Request(url, headers=headers, method=metodo)
                 with urllib.request.urlopen(req, timeout=10, context=self.ssl_context) as response:
                     return json.loads(response.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8') if e.fp else ""
+                raise Exception(f"HTTP Error {e.code}: {e.reason} | Detail: {body}")
             except (urllib.error.URLError, OSError) as e:
                 if tentativa == 2:
                     raise e
@@ -167,13 +183,14 @@ class BinanceNativeAPI:
         free_balances = {item['asset']: float(item['free']) for item in res.get('balances', [])}
         return {'free': free_balances}
 
-    def create_market_buy_order(self, symbol, quantity):
+    def create_market_buy_order(self, symbol, quantity, preco_estimado=1.0):
         symbol_fmt = symbol.replace("/", "").upper()
+        qtd_str = formatar_quantidade(quantity, preco_estimado)
         params = {
             "symbol": symbol_fmt,
             "side": "BUY",
             "type": "MARKET",
-            "quantity": f"{quantity:.4f}"
+            "quantity": qtd_str
         }
         res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
         
@@ -185,17 +202,21 @@ class BinanceNativeAPI:
                 avg_price = sum(float(f['price']) * float(f['qty']) for f in fills) / total_qty
         
         if avg_price == 0.0:
-            avg_price = float(res.get('cummulativeQuoteQty', 0)) / float(res.get('executedQty', 1)) if float(res.get('executedQty', 0)) > 0 else 0.0
+            executed_qty = float(res.get('executedQty', 0))
+            cum_quote = float(res.get('cummulativeQuoteQty', 0))
+            if executed_qty > 0:
+                avg_price = cum_quote / executed_qty
 
         return {'average': avg_price, 'raw': res}
 
-    def create_market_sell_order(self, symbol, quantity):
+    def create_market_sell_order(self, symbol, quantity, preco_estimado=1.0):
         symbol_fmt = symbol.replace("/", "").upper()
+        qtd_str = formatar_quantidade(quantity, preco_estimado)
         params = {
             "symbol": symbol_fmt,
             "side": "SELL",
             "type": "MARKET",
-            "quantity": f"{quantity:.4f}"
+            "quantity": qtd_str
         }
         res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
         fills = res.get('fills', [])
@@ -524,7 +545,8 @@ class BotTradingApp(App):
 
                 sync_posicao(SYMBOL, preco, qtd, self)
 
-                em_operacao = qtd > 0.0001
+                # Verifica se há saldo ou se o estado local já registrou preço de entrada
+                em_operacao = (qtd > 0.0001) or (estado.get("preco_entrada", 0) > 0)
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
                 tempo_ok = (time.time() - estado["ultimo_trade_time"]) > cooldown
                 distancia_ma = (ma9 - ma21) / ma21 * 100
@@ -590,8 +612,8 @@ class BotTradingApp(App):
                     if entrada_valida and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
                         self.atualizar_status(f"🚀 ENTRADA CONFIRMADA ({tipo_entrada.upper()}) | Prob IA: {prob:.2f}")
                         try:
-                            quantidade = round(valor_ordem / preco, 4)
-                            order = exchange.create_market_buy_order(SYMBOL, quantidade)
+                            quantidade = valor_ordem / preco
+                            order = exchange.create_market_buy_order(SYMBOL, quantidade, preco_estimado=preco)
 
                             preco_executado = order.get('average')
                             if not preco_executado or preco_executado == 0:
@@ -618,18 +640,19 @@ class BotTradingApp(App):
 
                 # --- LÓGICA DE SAÍDA ---
                 if em_operacao:
-                    lucro = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
+                    preco_ref = estado["preco_entrada"] if estado["preco_entrada"] > 0 else preco
+                    lucro = ((preco - preco_ref) / preco_ref) * 100
 
                     if preco > estado["topo_preco"]:
                         estado["topo_preco"] = preco
                         salvar_estado()
 
-                    lucro_max = ((estado["topo_preco"] - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
+                    lucro_max = ((estado["topo_preco"] - preco_ref) / preco_ref) * 100
 
                     vender = False
                     motivo_venda = ""
 
-                    stop_emergencia = estado["preco_entrada"] * 0.995
+                    stop_emergencia = preco_ref * 0.995
 
                     if preco <= stop_emergencia:
                         vender = True
@@ -655,7 +678,7 @@ class BotTradingApp(App):
                         else:
                             lucro_travado = lucro_max - 0.35
 
-                        stop_dinamico = estado["preco_entrada"] * (1 + lucro_travado / 100)
+                        stop_dinamico = preco_ref * (1 + lucro_travado / 100)
 
                         if preco <= stop_dinamico:
                             vender = True
@@ -664,9 +687,9 @@ class BotTradingApp(App):
                     if vender:
                         self.atualizar_status(f"❌ VENDENDO ({SYMBOL}): {motivo_venda}")
                         try:
-                            order = exchange.create_market_sell_order(SYMBOL, qtd)
+                            order = exchange.create_market_sell_order(SYMBOL, qtd, preco_estimado=preco)
                             preco_saida = order.get('average') or preco
-                            lucro_real = ((preco_saida - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
+                            lucro_real = ((preco_saida - preco_ref) / preco_ref) * 100
 
                             salvar_trade_relatorio(
                                 SYMBOL, estado, lucro_real, preco_saida, rsi, ma9, ma21, lucro_max

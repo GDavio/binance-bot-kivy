@@ -600,7 +600,7 @@ class BotTradingApp(App):
                         except Exception as e:
                             self.atualizar_status(f"⚠️ Erro ao comprar {SYMBOL}: {e}")
 
-                # --- LÓGICA DE SAÍDA E TRAILING STOP ESCALONADO ----
+                # --- LÓGICA DE SAÍDA E TRAILING STOP ESCALONADO ---
                 if em_operacao:
                     lucro = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
 

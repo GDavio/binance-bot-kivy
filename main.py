@@ -21,6 +21,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
+from kivy.uix.accordion import Accordion, AccordionItem
 from kivy.utils import platform
 
 # --- Android / Pyjnius Integration ---
@@ -112,7 +113,7 @@ def parar_foreground_service():
         print(f"Erro ao parar Foreground Service: {e}")
 
 # ==========================================
-# CLIENTE NATIVO DA API BINANCE (SSL CORRIGIDO)
+# CLIENTE NATIVO DA API BINANCE (SSL FIX)
 # ==========================================
 
 class BinanceNativeAPI:
@@ -121,7 +122,6 @@ class BinanceNativeAPI:
         self.api_secret = api_secret.strip()
         self.base_url = "https://api.binance.com"
         
-        # Ignora verificação estrita de certificado SSL para rodar no Android sem falhar
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
@@ -203,7 +203,7 @@ class BinanceNativeAPI:
         return {'average': avg_price or float(res.get('price', 0))}
 
 # ==========================================
-# LÓGICA DE IA E INDICADORES TÉCNICOS
+# IA E PERSISTÊNCIA
 # ==========================================
 
 historico_ia = []
@@ -286,10 +286,6 @@ def sync_posicao(symbol, preco_atual, quantidade, app_instance=None):
         estado["ultimo_trade_time"] = time.time()
         estado["tempo_entrada"] = time.time()
         salvar_estado()
-        msg = f"🔄 AUTO-SYNC ({symbol})"
-        print(msg)
-        if app_instance:
-            app_instance.atualizar_status(msg)
 
 def salvar_trade_relatorio(symbol, estado, lucro, preco_saida, rsi_saida, ma9_saida, ma21_saida, lucro_max):
     tempo_operacao = int(time.time() - estado.get("tempo_entrada", time.time()))
@@ -360,58 +356,54 @@ def carregar_config():
     return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT LTC/USDT", "valor_usdt": "12"}
 
 # ==========================================
-# INTERFACE KIVY MOBILE (LAYOUT REESTRUTURADO)
+# INTERFACE KIVY COMPLETA
 # ==========================================
 
 class BotTradingApp(App):
     def build(self):
-        Window.clearcolor = (0.08, 0.08, 0.1, 1)
+        Window.clearcolor = (0.05, 0.05, 0.07, 1)
         self.bot_rodando = False
         self.wake_lock = None
 
         carregar_estado()
         carregar_dados_ia()
 
-        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
+        root = BoxLayout(orientation='vertical', padding=8, spacing=6)
 
-        # Título fixo
+        # Header
         lbl_titulo = Label(
             text="Bot Trading Binance",
-            font_size='20sp',
+            font_size='18sp',
             bold=True,
             size_hint_y=None,
-            height=35,
+            height=30,
             color=(1, 1, 1, 1)
         )
         root.add_widget(lbl_titulo)
 
         config = carregar_config()
 
-        # Formulário de Entradas dentro de um ScrollView
-        form_scroll = ScrollView(size_hint=(1, None), height=260)
-        form_layout = GridLayout(cols=1, spacing=4, size_hint_y=None)
-        form_layout.bind(minimum_height=form_layout.setter('height'))
+        # Painel Configurações Ocultável (Para não comer tela)
+        self.config_box = BoxLayout(orientation='vertical', spacing=4, size_hint_y=None, height=0)
+        self.config_box.opacity = 0
+        
+        self.api_key = TextInput(text=config.get("api_key", ""), hint_text="API Key", multiline=False, password=True, size_hint_y=None, height=35)
+        self.api_secret = TextInput(text=config.get("api_secret", ""), hint_text="Secret Key", multiline=False, password=True, size_hint_y=None, height=35)
+        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), hint_text="Pares", multiline=False, size_hint_y=None, height=35)
+        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), hint_text="Valor Ordem (USDT)", multiline=False, size_hint_y=None, height=35)
 
-        form_layout.add_widget(Label(text="Binance API Key", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
-        self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.api_key)
+        self.config_box.add_widget(self.api_key)
+        self.config_box.add_widget(self.api_secret)
+        self.config_box.add_widget(self.symbols)
+        self.config_box.add_widget(self.valor_usdt)
 
-        form_layout.add_widget(Label(text="Binance Secret Key", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
-        self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.api_secret)
+        self.btn_toggle_config = Button(text="⚙️ Configurações da API / Parâmetros", size_hint_y=None, height=30, background_color=(0.2, 0.2, 0.25, 1))
+        self.btn_toggle_config.bind(on_press=self.toggle_config_panel)
+        
+        root.add_widget(self.btn_toggle_config)
+        root.add_widget(self.config_box)
 
-        form_layout.add_widget(Label(text="Pares (separados por espaço)", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
-        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), multiline=False, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.symbols)
-
-        form_layout.add_widget(Label(text="Valor por Ordem (USDT)", size_hint_y=None, height=20, font_size='12sp', color=(0.7, 0.7, 0.7, 1)))
-        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), multiline=False, size_hint_y=None, height=38, background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.valor_usdt)
-
-        form_scroll.add_widget(form_layout)
-        root.add_widget(form_scroll)
-
-        # Botão Ligar/Desligar Fixo
+        # Botão Bot Ligar/Desligar
         self.btn_toggle = Button(
             text="LIGAR ROBÔ",
             size_hint_y=None,
@@ -423,15 +415,17 @@ class BotTradingApp(App):
         self.btn_toggle.bind(on_press=self.toggle_bot)
         root.add_widget(self.btn_toggle)
 
-        # Terminal de Logs Ocupando o restante da tela
+        # Área de Logs Completa (Monospace)
         scroll_logs = ScrollView(size_hint=(1, 1))
         self.lbl_logs = Label(
-            text="Aguardando inicialização...\n",
+            text="[SISTEMA] Aguardando inicialização...\n",
             size_hint_y=None,
-            font_size='13sp',
+            font_size='11sp',
+            font_name='Roboto',
             halign='left',
             valign='top',
-            color=(0.8, 0.8, 0.8, 1)
+            markup=True,
+            color=(0.9, 0.9, 0.9, 1)
         )
         self.lbl_logs.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
         self.lbl_logs.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
@@ -440,10 +434,20 @@ class BotTradingApp(App):
 
         return root
 
+    def toggle_config_panel(self, instance):
+        if self.config_box.height == 0:
+            self.config_box.height = 150
+            self.config_box.opacity = 1
+        else:
+            self.config_box.height = 0
+            self.config_box.opacity = 0
+
     def atualizar_status(self, texto):
         def _update(dt):
-            hora = datetime.now().strftime("%H:%M:%S")
-            self.lbl_logs.text += f"[{hora}] {texto}\n"
+            self.lbl_logs.text += f"{texto}\n"
+            # Limita tamanho da string de logs para não estourar memória do Android
+            if len(self.lbl_logs.text) > 20000:
+                self.lbl_logs.text = self.lbl_logs.text[-15000:]
         Clock.schedule_once(_update)
 
     def toggle_bot(self, instance):
@@ -454,6 +458,10 @@ class BotTradingApp(App):
                 self.symbols.text.strip(),
                 self.valor_usdt.text.strip()
             )
+            # Oculta painel de config ao ligar para maximizar espaço
+            self.config_box.height = 0
+            self.config_box.opacity = 0
+
             self.wake_lock = adquirir_wake_lock()
             iniciar_foreground_service()
 
@@ -530,53 +538,66 @@ class BotTradingApp(App):
 
                 em_operacao = qtd > 0.0001
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
+                tempo_ok = (time.time() - estado["ultimo_trade_time"]) > cooldown
+                distancia_ma = (ma9 - ma21) / ma21 * 100
 
-                self.atualizar_status(f"📊 {SYMBOL} | Preço: {preco:.2f} | RSI: {rsi:.2f}")
+                tendencia = ma9 > ma21
+                tendencia_forte = distancia_ma > 0.02
 
-                # --- LÓGICA DE ENTRADA (3 PADRÕES + IA) ---
+                pullback = (
+                    tendencia and
+                    preco <= ma9 * 1.003 and preco > ma9 and
+                    rsi < 62 and
+                    rsi > rsi_anterior
+                )
+
+                continuidade = (
+                    tendencia and
+                    preco > ma9 and
+                    52 < rsi < 68 and
+                    rsi > rsi_anterior and
+                    closes[-1] > closes[-2] and
+                    (distancia_ma > 0.03 or (distancia_ma > 0.001 and closes[-1] > closes[-2]))
+                )
+
+                rompimento = (
+                    tendencia_forte and
+                    preco >= max(closes[-3:]) and
+                    closes[-1] > closes[-2] and
+                    55 < rsi < 75 and
+                    rsi > rsi_anterior and
+                    preco > ma9 and
+                    (preco - closes[-3]) / closes[-3] * 100 > 0.01
+                )
+
+                tipo_entrada = "nenhum"
+                if pullback:
+                    tipo_entrada = "pullback"
+                elif continuidade:
+                    tipo_entrada = "continuidade"
+                elif rompimento:
+                    tipo_entrada = "rompimento"
+
+                prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
+
+                # --- FORMATANDO EXIBIÇÃO NO PADRÃO COMPLETO ---
+                status_posicao = f"🔒 POSIÇÃO ABERTA ({estado['preco_entrada']:.2f})" if em_operacao else "⏳ SEM POSIÇÃO"
+                
+                bloco_log = (
+                    f"============================== {SYMBOL}\n"
+                    f"📊 MERCADO\n"
+                    f"Preço: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
+                    f"💰 USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
+                    f"{status_posicao}\n"
+                    f"🧠 CONDIÇÕES:\n"
+                    f"Tendência: {tendencia} | Pullback: {pullback} | Continuidade: {continuidade} | Rompimento: {rompimento}\n"
+                    f"Volatilidade: {volatilidade:.2f} | Tempo OK: {tempo_ok}\n"
+                    f"🧠 Probabilidade IA: {prob:.2f}"
+                )
+                self.atualizar_status(bloco_log)
+
+                # --- LÓGICA DE ENTRADA ---
                 if not em_operacao and usdt >= valor_ordem:
-                    tempo_ok = (time.time() - estado["ultimo_trade_time"]) > cooldown
-                    distancia_ma = (ma9 - ma21) / ma21 * 100
-
-                    tendencia = ma9 > ma21
-                    tendencia_forte = distancia_ma > 0.02
-
-                    pullback = (
-                        tendencia and
-                        preco <= ma9 * 1.003 and preco > ma9 and
-                        rsi < 62 and
-                        rsi > rsi_anterior
-                    )
-
-                    continuidade = (
-                        tendencia and
-                        preco > ma9 and
-                        52 < rsi < 68 and
-                        rsi > rsi_anterior and
-                        closes[-1] > closes[-2] and
-                        (distancia_ma > 0.03 or (distancia_ma > 0.001 and closes[-1] > closes[-2]))
-                    )
-
-                    rompimento = (
-                        tendencia_forte and
-                        preco >= max(closes[-3:]) and
-                        closes[-1] > closes[-2] and
-                        55 < rsi < 75 and
-                        rsi > rsi_anterior and
-                        preco > ma9 and
-                        (preco - closes[-3]) / closes[-3] * 100 > 0.01
-                    )
-
-                    tipo_entrada = "nenhum"
-                    if pullback:
-                        tipo_entrada = "pullback"
-                    elif continuidade:
-                        tipo_entrada = "continuidade"
-                    elif rompimento:
-                        tipo_entrada = "rompimento"
-
-                    prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
-
                     entrada_valida = (pullback or continuidade or rompimento) and volatilidade > 0.10
 
                     if entrada_valida and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
@@ -603,7 +624,7 @@ class BotTradingApp(App):
                         except Exception as e:
                             self.atualizar_status(f"❌ ERRO AO COMPRAR {SYMBOL}: {e}")
 
-                # --- LÓGICA DE SAÍDA E TRAILING STOP ---
+                # --- LÓGICA DE SAÍDA ---
                 if em_operacao:
                     lucro = ((preco - estado["preco_entrada"]) / estado["preco_entrada"]) * 100
 

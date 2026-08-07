@@ -176,13 +176,18 @@ class BinanceNativeAPI:
             "quantity": f"{quantity:.4f}"
         }
         res = self._requisicao("POST", "/api/v3/order", params=params, assinado=True)
-        fills = res.get('fills', [])
+        
         avg_price = 0.0
+        fills = res.get('fills', [])
         if fills:
             total_qty = sum(float(f['qty']) for f in fills)
             if total_qty > 0:
                 avg_price = sum(float(f['price']) * float(f['qty']) for f in fills) / total_qty
-        return {'average': avg_price or float(res.get('price', 0))}
+        
+        if avg_price == 0.0:
+            avg_price = float(res.get('cummulativeQuoteQty', 0)) / float(res.get('executedQty', 1)) if float(res.get('executedQty', 0)) > 0 else 0.0
+
+        return {'average': avg_price, 'raw': res}
 
     def create_market_sell_order(self, symbol, quantity):
         symbol_fmt = symbol.replace("/", "").upper()
@@ -278,7 +283,7 @@ def carregar_estado():
 
 def sync_posicao(symbol, preco_atual, quantidade, app_instance=None):
     estado = estado_por_par[symbol]
-    if quantidade > 0.0001 and estado["preco_entrada"] == 0:
+    if quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0:
         estado["preco_entrada"] = preco_atual
         estado["topo_preco"] = preco_atual
         estado["tipo_operacao"] = "COMPRA"
@@ -381,7 +386,7 @@ class BotTradingApp(App):
 
         config = carregar_config()
 
-        # Formulário Fixo Visível (35% da tela)
+        # Formulário Fixo Visível (38% da tela)
         form_layout = GridLayout(cols=1, spacing=6, size_hint=(1, 0.38))
 
         form_layout.add_widget(Label(text="Binance API Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
@@ -588,10 +593,15 @@ class BotTradingApp(App):
                             quantidade = round(valor_ordem / preco, 4)
                             order = exchange.create_market_buy_order(SYMBOL, quantidade)
 
-                            estado["preco_entrada"] = order.get('average') or preco
-                            estado["topo_preco"] = estado["preco_entrada"]
+                            preco_executado = order.get('average')
+                            if not preco_executado or preco_executado == 0:
+                                preco_executado = preco
+
+                            estado["preco_entrada"] = preco_executado
+                            estado["topo_preco"] = preco_executado
                             estado["tempo_entrada"] = time.time()
                             estado["ultimo_trade_time"] = time.time()
+                            estado["tipo_operacao"] = "COMPRA"
                             estado["tipo_entrada"] = tipo_entrada
                             estado["entrada_rsi"] = rsi
                             estado["entrada_ma9"] = ma9
@@ -602,7 +612,7 @@ class BotTradingApp(App):
                             estado["entrada_posicao_ma21"] = preco > ma21
 
                             salvar_estado()
-                            self.atualizar_status(f"✅ COMPRA EXECUTADA em {SYMBOL} @ {estado['preco_entrada']:.2f}")
+                            self.atualizar_status(f"✅ COMPRA EXECUTADA em {SYMBOL} @ {preco_executado:.2f}")
                         except Exception as e:
                             self.atualizar_status(f"❌ ERRO AO COMPRAR {SYMBOL}: {e}")
 

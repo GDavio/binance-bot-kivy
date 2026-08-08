@@ -407,7 +407,7 @@ class BotTradingApp(App):
 
         config = carregar_config()
 
-        # Formulário Fixo Visível (38% da tela)
+        # Formulário Fixo Visível
         form_layout = GridLayout(cols=1, spacing=6, size_hint=(1, 0.38))
 
         form_layout.add_widget(Label(text="Binance API Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
@@ -439,7 +439,7 @@ class BotTradingApp(App):
         self.btn_toggle.bind(on_press=self.toggle_bot)
         root.add_widget(self.btn_toggle)
 
-        # Container de Logs (49% restante da tela)
+        # Container de Logs
         scroll_logs = ScrollView(size_hint=(1, 0.49))
         self.lbl_logs = Label(
             text="[SISTEMA] Preencha as chaves acima e clique em LIGAR ROBÔ.\n",
@@ -477,7 +477,7 @@ class BotTradingApp(App):
             self.bot_rodando = True
             self.btn_toggle.text = "DESLIGAR ROBÔ"
             self.btn_toggle.background_color = (0.85, 0.2, 0.2, 1)
-            self.atualizar_status("🚀 ROBÔ INICIADO COM SUCESSO!")
+            self.atualizar_status(">>> ROBÔ INICIADO COM SUCESSO! <<<")
             threading.Thread(target=self.loop_principal_bot, daemon=True).start()
         else:
             self.bot_rodando = False
@@ -486,7 +486,7 @@ class BotTradingApp(App):
 
             self.btn_toggle.text = "LIGAR ROBÔ"
             self.btn_toggle.background_color = (0, 0.7, 0.3, 1)
-            self.atualizar_status("🛑 Robô desligado.")
+            self.atualizar_status("--- Robô desligado ---")
 
     def loop_principal_bot(self):
         symbols_list = [s.strip().upper() for s in self.symbols.text.strip().split() if s.strip()]
@@ -540,12 +540,11 @@ class BotTradingApp(App):
                     usdt = saldo['free'].get('USDT', 0.0)
 
                 except Exception as e:
-                    self.atualizar_status(f"⚠️ Erro ao carregar ({SYMBOL}): {e}")
+                    self.atualizar_status(f"[ERRO] Falha ao carregar ({SYMBOL}): {e}")
                     continue
 
                 sync_posicao(SYMBOL, preco, qtd, self)
 
-                # Verifica se há saldo ou se o estado local já registrou preço de entrada
                 em_operacao = (qtd > 0.0001) or (estado.get("preco_entrada", 0) > 0)
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
                 tempo_ok = (time.time() - estado["ultimo_trade_time"]) > cooldown
@@ -590,18 +589,35 @@ class BotTradingApp(App):
 
                 prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                status_posicao = f"🔒 POSIÇÃO ABERTA ({estado['preco_entrada']:.2f})" if em_operacao else "⏳ SEM POSIÇÃO"
-                
+                # --- EXIBIÇÃO DE POSIÇÃO E GANHOS ---
+                if em_operacao:
+                    preco_ref = estado["preco_entrada"] if estado["preco_entrada"] > 0 else preco
+                    lucro_pct = ((preco - preco_ref) / preco_ref) * 100
+                    valor_investido = qtd * preco_ref if preco_ref > 0 else valor_ordem
+                    lucro_usdt = (lucro_pct / 100) * valor_investido
+
+                    if preco > estado.get("topo_preco", preco):
+                        estado["topo_preco"] = preco
+                        salvar_estado()
+
+                    lucro_max = ((estado.get("topo_preco", preco) - preco_ref) / preco_ref) * 100
+
+                    status_posicao = (
+                        f"[POSICAO ABERTA]\n"
+                        f"Entrada: {preco_ref:.2f} | Atual: {preco:.2f}\n"
+                        f"LUCRO ATUAL: {lucro_pct:+.2f}% (${lucro_usdt:+.2f} USDT)\n"
+                        f"Lucro Maximo: {lucro_max:.2f}% | Stop Loss: {preco_ref * 0.995:.2f}"
+                    )
+                else:
+                    status_posicao = "SEM POSICAO ABERTA"
+
                 bloco_log = (
                     f"============================== {SYMBOL}\n"
-                    f"📊 MERCADO\n"
-                    f"Preço: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
-                    f"💰 USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
-                    f"{status_posicao}\n"
-                    f"🧠 CONDIÇÕES:\n"
-                    f"Tendência: {tendencia} | Pullback: {pullback} | Continuidade: {continuidade} | Rompimento: {rompimento}\n"
-                    f"Volatilidade: {volatilidade:.2f} | Tempo OK: {tempo_ok}\n"
-                    f"🧠 Probabilidade IA: {prob:.2f}"
+                    f"MERCADO: Preco: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
+                    f"SALDO: USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
+                    f"STATUS: {status_posicao}\n"
+                    f"ESTRATEGIA: Tend: {tendencia} | Pullback: {pullback} | Continuidade: {continuidade} | Rompimento: {rompimento}\n"
+                    f"Volatilidade: {volatilidade:.2f}% | Tempo OK: {tempo_ok} | Prob IA: {prob:.2f}"
                 )
                 self.atualizar_status(bloco_log)
 
@@ -610,7 +626,7 @@ class BotTradingApp(App):
                     entrada_valida = (pullback or continuidade or rompimento) and volatilidade > 0.10
 
                     if entrada_valida and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
-                        self.atualizar_status(f"🚀 ENTRADA CONFIRMADA ({tipo_entrada.upper()}) | Prob IA: {prob:.2f}")
+                        self.atualizar_status(f"*** ENTRADA CONFIRMADA ({tipo_entrada.upper()}) | Prob IA: {prob:.2f} ***")
                         try:
                             quantidade = valor_ordem / preco
                             order = exchange.create_market_buy_order(SYMBOL, quantidade, preco_estimado=preco)
@@ -634,9 +650,9 @@ class BotTradingApp(App):
                             estado["entrada_posicao_ma21"] = preco > ma21
 
                             salvar_estado()
-                            self.atualizar_status(f"✅ COMPRA EXECUTADA em {SYMBOL} @ {preco_executado:.2f}")
+                            self.atualizar_status(f"[COMPRA EXECUTADA] {SYMBOL} @ {preco_executado:.2f}")
                         except Exception as e:
-                            self.atualizar_status(f"❌ ERRO AO COMPRAR {SYMBOL}: {e}")
+                            self.atualizar_status(f"[ERRO COMPRA] {SYMBOL}: {e}")
 
                 # --- LÓGICA DE SAÍDA ---
                 if em_operacao:
@@ -656,15 +672,15 @@ class BotTradingApp(App):
 
                     if preco <= stop_emergencia:
                         vender = True
-                        motivo_venda = "🚨 STOP DURO -0.5%"
+                        motivo_venda = "STOP LOSS -0.5%"
 
                     elif (rsi < 38 and rsi < rsi_anterior and preco < ma9 and preco < preco_anterior and lucro < -0.25):
                         vender = True
-                        motivo_venda = "📉 REVERSÃO FORTE"
+                        motivo_venda = "REVERSAO FORTE"
 
                     elif (all(c < ma21 for c in closes[-3:]) and rsi < 43 and rsi < rsi_anterior and lucro < -0.35):
                         vender = True
-                        motivo_venda = "💀 PERDEU TENDÊNCIA"
+                        motivo_venda = "PERDEU TENDENCIA"
 
                     elif lucro_max >= 0.35:
                         if lucro_max < 0.70:
@@ -682,10 +698,10 @@ class BotTradingApp(App):
 
                         if preco <= stop_dinamico:
                             vender = True
-                            motivo_venda = f"🛡️ TRAILING STOP ({lucro_travado:.2f}%)"
+                            motivo_venda = f"TRAILING STOP ({lucro_travado:.2f}%)"
 
                     if vender:
-                        self.atualizar_status(f"❌ VENDENDO ({SYMBOL}): {motivo_venda}")
+                        self.atualizar_status(f"[VENDA DISPARADA] {SYMBOL}: {motivo_venda}")
                         try:
                             order = exchange.create_market_sell_order(SYMBOL, qtd, preco_estimado=preco)
                             preco_saida = order.get('average') or preco
@@ -718,9 +734,9 @@ class BotTradingApp(App):
                             estado["entrada_posicao_ma21"] = False
                             salvar_estado()
 
-                            self.atualizar_status(f"💰 RESULTADO FINAL: {lucro_real:.2f}%")
+                            self.atualizar_status(f"[RESULTADO FINAL] {SYMBOL}: {lucro_real:+.2f}%")
                         except Exception as e:
-                            self.atualizar_status(f"⚠️ Erro ao vender {SYMBOL}: {e}")
+                            self.atualizar_status(f"[ERRO VENDA] {SYMBOL}: {e}")
 
             time.sleep(10)
 

@@ -302,9 +302,33 @@ def carregar_estado():
         except Exception:
             estado_por_par = {}
 
+def zerar_posicao_local(symbol):
+    """Reseta o estado local de uma moeda."""
+    if symbol in estado_por_par:
+        estado = estado_por_par[symbol]
+        estado["preco_entrada"] = 0
+        estado["topo_preco"] = 0
+        estado["entrada_rsi"] = 0
+        estado["entrada_ma9"] = 0
+        estado["entrada_ma21"] = 0
+        estado["entrada_distancia_ma"] = 0
+        estado["entrada_volatilidade"] = 0
+        estado["entrada_posicao_ma9"] = False
+        estado["entrada_posicao_ma21"] = False
+        salvar_estado()
+
 def sync_posicao(symbol, preco_atual, quantidade, app_instance=None):
+    """Sincroniza o saldo real da Binance com o estado do robô."""
     estado = estado_por_par[symbol]
-    if quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0:
+    
+    # Se na Binance não tem saldo do ativo (vendeu manualmente ou zerou), limpa a posição local
+    if quantidade < 0.0001:
+        if estado.get("preco_entrada", 0) > 0:
+            if app_instance:
+                app_instance.atualizar_status(f"[SYNC] Posição em {symbol} encerrada externamente. Resetando estado.")
+            zerar_posicao_local(symbol)
+    # Se existe saldo na Binance mas não tinha preço gravado
+    elif quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0:
         estado["preco_entrada"] = preco_atual
         estado["topo_preco"] = preco_atual
         estado["tipo_operacao"] = "COMPRA"
@@ -543,9 +567,10 @@ class BotTradingApp(App):
                     self.atualizar_status(f"[ERRO] Falha ao carregar ({SYMBOL}): {e}")
                     continue
 
+                # Sincroniza saldo do ativo com a memória do robô
                 sync_posicao(SYMBOL, preco, qtd, self)
 
-                em_operacao = (qtd > 0.0001) or (estado.get("preco_entrada", 0) > 0)
+                em_operacao = (qtd > 0.0001) and (estado.get("preco_entrada", 0) > 0)
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
                 tempo_ok = (time.time() - estado["ultimo_trade_time"]) > cooldown
                 distancia_ma = (ma9 - ma21) / ma21 * 100
@@ -609,13 +634,13 @@ class BotTradingApp(App):
                         f"Lucro Maximo: {lucro_max:.2f}% | Stop Loss: {preco_ref * 0.995:.2f}"
                     )
                 else:
-                    status_posicao = "SEM POSICAO ABERTA"
+                    status_posicao = "STATUS: SEM POSICAO ABERTA"
 
                 bloco_log = (
                     f"============================== {SYMBOL}\n"
                     f"MERCADO: Preco: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
                     f"SALDO: USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
-                    f"STATUS: {status_posicao}\n"
+                    f"{status_posicao}\n"
                     f"ESTRATEGIA: Tend: {tendencia} | Pullback: {pullback} | Continuidade: {continuidade} | Rompimento: {rompimento}\n"
                     f"Volatilidade: {volatilidade:.2f}% | Tempo OK: {tempo_ok} | Prob IA: {prob:.2f}"
                 )
@@ -722,21 +747,15 @@ class BotTradingApp(App):
                                 "resultado": lucro_real
                             })
                             salvar_dados_ia()
-
-                            estado["preco_entrada"] = 0
-                            estado["topo_preco"] = 0
-                            estado["entrada_rsi"] = 0
-                            estado["entrada_ma9"] = 0
-                            estado["entrada_ma21"] = 0
-                            estado["entrada_distancia_ma"] = 0
-                            estado["entrada_volatilidade"] = 0
-                            estado["entrada_posicao_ma9"] = False
-                            estado["entrada_posicao_ma21"] = False
-                            salvar_estado()
+                            zerar_posicao_local(SYMBOL)
 
                             self.atualizar_status(f"[RESULTADO FINAL] {SYMBOL}: {lucro_real:+.2f}%")
                         except Exception as e:
                             self.atualizar_status(f"[ERRO VENDA] {SYMBOL}: {e}")
+                            # Se o erro for quantidade inválida ou sem saldo (venda externa na Binance)
+                            if "-1013" in str(e) or "Invalid quantity" in str(e):
+                                self.atualizar_status(f"[SYNC] Posição de {SYMBOL} já encerrada na Binance. Resetando estado local.")
+                                zerar_posicao_local(SYMBOL)
 
             time.sleep(10)
 

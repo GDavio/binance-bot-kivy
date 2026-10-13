@@ -21,6 +21,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
 from kivy.uix.button import Button
+from kivy.uix.togglebutton import ToggleButton
 from kivy.utils import platform
 
 # --- Android Integration ---
@@ -92,7 +93,7 @@ def iniciar_foreground_service():
 
         builder = NotificationBuilder(activity, CHANNEL_ID)
         builder.setContentTitle("Bot Trading Binance")
-        builder.setContentText("Executando estratégias em segundo plano...")
+        builder.setContentText("Executando 24/7 em segundo plano...")
         builder.setSmallIcon(activity.getApplicationInfo().icon)
         builder.setContentIntent(pending_intent)
         builder.setOngoing(True)
@@ -116,7 +117,6 @@ def parar_foreground_service():
 # ==========================================
 
 def formatar_quantidade(quantidade, preco):
-    """Ajusta a precisão da quantidade de acordo com o preço da moeda para evitar HTTP 400 Bad Request."""
     if preco > 10000:
         return f"{quantidade:.5f}"
     elif preco > 1000:
@@ -129,9 +129,10 @@ def formatar_quantidade(quantidade, preco):
         return f"{int(quantidade)}"
 
 class BinanceNativeAPI:
-    def __init__(self, api_key="", api_secret=""):
+    def __init__(self, api_key="", api_secret="", simulacao=True):
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
+        self.simulacao = simulacao
         self.base_url = "https://api.binance.com"
         
         self.ssl_context = ssl.create_default_context()
@@ -178,12 +179,19 @@ class BinanceNativeAPI:
         res = self._requisicao("GET", "/api/v3/klines", {"symbol": symbol_fmt, "interval": timeframe, "limit": limit})
         return [float(c[4]) for c in res]
 
-    def fetch_balance(self):
+    def fetch_balance(self, saldo_virtual=10000.0):
+        if self.simulacao:
+            # Retorna saldo fictício para testes
+            return {'free': {'USDT': saldo_virtual, 'BTC': 0.1, 'ETH': 1.0, 'SOL': 10.0, 'LTC': 20.0}}
+        
         res = self._requisicao("GET", "/api/v3/account", assinado=True)
         free_balances = {item['asset']: float(item['free']) for item in res.get('balances', [])}
         return {'free': free_balances}
 
     def create_market_buy_order(self, symbol, quantity, preco_estimado=1.0):
+        if self.simulacao:
+            return {'average': preco_estimado, 'raw': {'simulated': True}}
+
         symbol_fmt = symbol.replace("/", "").upper()
         qtd_str = formatar_quantidade(quantity, preco_estimado)
         params = {
@@ -210,6 +218,9 @@ class BinanceNativeAPI:
         return {'average': avg_price, 'raw': res}
 
     def create_market_sell_order(self, symbol, quantity, preco_estimado=1.0):
+        if self.simulacao:
+            return {'average': preco_estimado, 'raw': {'simulated': True}}
+
         symbol_fmt = symbol.replace("/", "").upper()
         qtd_str = formatar_quantidade(quantity, preco_estimado)
         params = {
@@ -303,7 +314,6 @@ def carregar_estado():
             estado_por_par = {}
 
 def zerar_posicao_local(symbol):
-    """Reseta o estado local de uma moeda."""
     if symbol in estado_por_par:
         estado = estado_por_par[symbol]
         estado["preco_entrada"] = 0
@@ -317,18 +327,14 @@ def zerar_posicao_local(symbol):
         estado["entrada_posicao_ma21"] = False
         salvar_estado()
 
-def sync_posicao(symbol, preco_atual, quantidade, app_instance=None):
-    """Sincroniza o saldo real da Binance com o estado do robô."""
+def sync_posicao(symbol, preco_atual, quantidade, app_instance=None, simulacao=True):
     estado = estado_por_par[symbol]
-    
-    # Se na Binance não tem saldo do ativo (vendeu manualmente ou zerou), limpa a posição local
-    if quantidade < 0.0001:
+    if not simulacao and quantidade < 0.0001:
         if estado.get("preco_entrada", 0) > 0:
             if app_instance:
-                app_instance.atualizar_status(f"[SYNC] Posição em {symbol} encerrada externamente. Resetando estado.")
+                app_instance.atualizar_status(f"[SYNC] Posição em {symbol} encerrada externamente. Resetando.")
             zerar_posicao_local(symbol)
-    # Se existe saldo na Binance mas não tinha preço gravado
-    elif quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0:
+    elif quantidade > 0.0001 and estado.get("preco_entrada", 0) == 0 and not simulacao:
         estado["preco_entrada"] = preco_atual
         estado["topo_preco"] = preco_atual
         estado["tipo_operacao"] = "COMPRA"
@@ -385,12 +391,13 @@ def calcular_rsi(closes, period=14):
 def media(lista, periodo):
     return sum(lista[-periodo:]) / periodo
 
-def salvar_config(api_key, api_secret, symbols, valor_usdt):
+def salvar_config(api_key, api_secret, symbols, valor_usdt, simulacao):
     data = {
         "api_key": api_key,
         "api_secret": api_secret,
         "symbols": symbols,
-        "valor_usdt": valor_usdt
+        "valor_usdt": valor_usdt,
+        "simulacao": simulacao
     }
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f)
@@ -402,122 +409,190 @@ def carregar_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT LTC/USDT", "valor_usdt": "12"}
+    return {"api_key": "", "api_secret": "", "symbols": "ETH/USDT BTC/USDT SOL/USDT LTC/USDT", "valor_usdt": "12", "simulacao": True}
 
 # ==========================================
-# INTERFACE KIVY FIXA E CLARA
+# INTERFACE COM ABAS (MARKETS, TRADE, BOT & IA)
 # ==========================================
 
 class BotTradingApp(App):
     def build(self):
-        Window.clearcolor = (0.07, 0.07, 0.09, 1)
+        Window.clearcolor = (0.05, 0.05, 0.07, 1)
         self.bot_rodando = False
         self.wake_lock = None
+        self.saldo_simulado = 10000.0
 
         carregar_estado()
         carregar_dados_ia()
-
-        root = BoxLayout(orientation='vertical', padding=10, spacing=8)
-
-        # Header Fixo
-        lbl_titulo = Label(
-            text="Bot Trading Binance",
-            font_size='18sp',
-            bold=True,
-            size_hint=(1, 0.05),
-            color=(1, 1, 1, 1)
-        )
-        root.add_widget(lbl_titulo)
-
         config = carregar_config()
 
-        # Formulário Fixo Visível
-        form_layout = GridLayout(cols=1, spacing=6, size_hint=(1, 0.38))
+        root = BoxLayout(orientation='vertical')
 
-        form_layout.add_widget(Label(text="Binance API Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.api_key)
-
-        form_layout.add_widget(Label(text="Binance Secret Key:", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.api_secret)
-
-        form_layout.add_widget(Label(text="Pares (separados por espaço):", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), multiline=False, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.symbols)
-
-        form_layout.add_widget(Label(text="Valor por Ordem (USDT):", size_hint=(1, 0.12), font_size='11sp', halign='left', color=(0.7, 0.7, 0.7, 1)))
-        self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), multiline=False, size_hint=(1, 0.18), background_color=(0.15, 0.15, 0.18, 1), foreground_color=(1, 1, 1, 1))
-        form_layout.add_widget(self.valor_usdt)
-
-        root.add_widget(form_layout)
-
-        # Botão Ligar/Desligar Fixo
-        self.btn_toggle = Button(
-            text="LIGAR ROBÔ",
-            size_hint=(1, 0.08),
+        # Topo Fixo: Seletor Simulação / Real
+        top_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.06), padding=5, spacing=5)
+        self.btn_modo = ToggleButton(
+            text="🟢 MODO SIMULAÇÃO ($10.000 Fictício)" if config.get("simulacao", True) else "🔴 MODO REAL (Binance)",
+            state='down' if config.get("simulacao", True) else 'normal',
             bold=True,
             background_normal='',
-            background_color=(0, 0.7, 0.3, 1)
+            background_color=(0.15, 0.15, 0.2, 1)
         )
-        self.btn_toggle.bind(on_press=self.toggle_bot)
-        root.add_widget(self.btn_toggle)
+        self.btn_modo.bind(on_press=self.mudar_modo)
+        top_bar.add_widget(self.btn_modo)
+        root.add_widget(top_bar)
 
-        # Container de Logs
-        scroll_logs = ScrollView(size_hint=(1, 0.49))
-        self.lbl_logs = Label(
-            text="[SISTEMA] Preencha as chaves acima e clique em LIGAR ROBÔ.\n",
-            size_hint_y=None,
-            font_size='11sp',
-            halign='left',
-            valign='top',
-            color=(0.9, 0.9, 0.9, 1)
-        )
-        self.lbl_logs.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
-        self.lbl_logs.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
-        scroll_logs.add_widget(self.lbl_logs)
-        root.add_widget(scroll_logs)
+        # Container Principal de Conteúdo (Dinâmico por Aba)
+        self.content_area = BoxLayout(orientation='vertical', size_hint=(1, 0.86))
+        root.add_widget(self.content_area)
 
+        # Menu de Navegação Inferior (Abas: Markets | Trade | Bot & IA)
+        nav_bar = BoxLayout(orientation='horizontal', size_hint=(1, 0.08), spacing=2)
+        
+        self.tab_markets = Button(text="📈 MARKETS", bold=True, background_color=(0.2, 0.2, 0.25, 1))
+        self.tab_trade = Button(text="📊 TRADE", bold=True, background_color=(0.2, 0.2, 0.25, 1))
+        self.tab_bot = Button(text="🤖 BOT & IA", bold=True, background_color=(0.3, 0.3, 0.4, 1))
+
+        self.tab_markets.bind(on_press=lambda x: self.mudar_aba("markets"))
+        self.tab_trade.bind(on_press=lambda x: self.mudar_aba("trade"))
+        self.tab_bot.bind(on_press=lambda x: self.mudar_aba("bot"))
+
+        nav_bar.add_widget(self.tab_markets)
+        nav_bar.add_widget(self.tab_trade)
+        nav_bar.add_widget(self.tab_bot)
+        root.add_widget(nav_bar)
+
+        # Inicia na aba Bot & IA por padrão
+        self.mudar_aba("bot")
         return root
+
+    def mudar_modo(self, instance):
+        is_simulacao = (self.btn_modo.state == 'down')
+        if is_simulacao:
+            self.btn_modo.text = "🟢 MODO SIMULAÇÃO ($10.000 Fictício)"
+        else:
+            self.btn_modo.text = "🔴 MODO REAL (Binance)"
+
+    def mudar_aba(self, nome_aba):
+        self.content_area.clear_widgets()
+
+        if nome_aba == "markets":
+            # Aba Markets: Preços em tempo real simulados/reais
+            layout = BoxLayout(orientation='vertical', padding=10, spacing=5)
+            layout.add_widget(Label(text="Mercado Spot (Preços em Tempo Real)", font_size='16sp', bold=True, size_hint_y=None, height=35))
+            
+            scroll = ScrollView(size_hint=(1, 1))
+            self.lbl_markets = Label(text="Carregando cotações...", size_hint_y=None, font_size='13sp', halign='left', valign='top')
+            self.lbl_markets.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+            self.lbl_markets.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
+            scroll.add_widget(self.lbl_markets)
+            layout.add_widget(scroll)
+            self.content_area.add_widget(layout)
+
+        elif nome_aba == "trade":
+            # Aba Trade: Visão Geral / Gráficos resumidos
+            layout = BoxLayout(orientation='vertical', padding=10, spacing=5)
+            layout.add_widget(Label(text="Painel de Trade & Indicadores", font_size='16sp', bold=True, size_hint_y=None, height=35))
+            
+            scroll = ScrollView(size_hint=(1, 1))
+            self.lbl_trade = Label(text="Selecione um par na aba Bot para iniciar as análises de gráfico.", size_hint_y=None, font_size='13sp', halign='left', valign='top')
+            self.lbl_trade.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+            self.lbl_trade.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
+            scroll.add_widget(self.lbl_trade)
+            layout.add_widget(scroll)
+            self.content_area.add_widget(layout)
+
+        elif nome_aba == "bot":
+            config = carregar_config()
+            # Aba Bot & IA: Configurações, Parâmetros e Logs 24/7
+            layout = BoxLayout(orientation='vertical', padding=10, spacing=6)
+            
+            form_layout = GridLayout(cols=1, spacing=4, size_hint=(1, 0.45))
+            form_layout.add_widget(Label(text="Binance API Key:", font_size='11sp', size_hint_y=None, height=20))
+            self.api_key = TextInput(text=config.get("api_key", ""), multiline=False, password=True, size_hint_y=None, height=32)
+            form_layout.add_widget(self.api_key)
+
+            form_layout.add_widget(Label(text="Binance Secret Key:", font_size='11sp', size_hint_y=None, height=20))
+            self.api_secret = TextInput(text=config.get("api_secret", ""), multiline=False, password=True, size_hint_y=None, height=32)
+            form_layout.add_widget(self.api_secret)
+
+            form_layout.add_widget(Label(text="Pares (ex: ETH/USDT BTC/USDT):", font_size='11sp', size_hint_y=None, height=20))
+            self.symbols = TextInput(text=config.get("symbols", "ETH/USDT BTC/USDT SOL/USDT LTC/USDT"), multiline=False, size_hint_y=None, height=32)
+            form_layout.add_widget(self.symbols)
+
+            form_layout.add_widget(Label(text="Valor por Ordem (USDT):", font_size='11sp', size_hint_y=None, height=20))
+            self.valor_usdt = TextInput(text=config.get("valor_usdt", "12"), multiline=False, size_hint_y=None, height=32)
+            form_layout.add_widget(self.valor_usdt)
+
+            layout.add_widget(form_layout)
+
+            self.btn_toggle = Button(
+                text="LIGAR ROBÔ (24/7)",
+                size_hint=(1, 0.08),
+                bold=True,
+                background_normal='',
+                background_color=(0, 0.7, 0.3, 1) if not self.bot_rodando else (0.85, 0.2, 0.2, 1)
+            )
+            self.btn_toggle.bind(on_press=self.toggle_bot)
+            layout.add_widget(self.btn_toggle)
+
+            scroll_logs = ScrollView(size_hint=(1, 0.47))
+            self.lbl_logs = Label(
+                text="[SISTEMA] Configurado para rodar 24/7. Selecione o modo e clique em LIGAR.\n",
+                size_hint_y=None,
+                font_size='11sp',
+                halign='left',
+                valign='top'
+            )
+            self.lbl_logs.bind(texture_size=lambda instance, value: setattr(instance, 'height', value[1]))
+            self.lbl_logs.bind(width=lambda instance, value: setattr(instance, 'text_size', (value, None)))
+            scroll_logs.add_widget(self.lbl_logs)
+            layout.add_widget(scroll_logs)
+
+            self.content_area.add_widget(layout)
 
     def atualizar_status(self, texto):
         def _update(dt):
-            self.lbl_logs.text += f"{texto}\n"
-            if len(self.lbl_logs.text) > 15000:
-                self.lbl_logs.text = self.lbl_logs.text[-10000:]
+            if hasattr(self, 'lbl_logs'):
+                self.lbl_logs.text += f"{texto}\n"
+                if len(self.lbl_logs.text) > 15000:
+                    self.lbl_logs.text = self.lbl_logs.text[-10000:]
         Clock.schedule_once(_update)
 
     def toggle_bot(self, instance):
+        simulacao_ativa = (self.btn_modo.state == 'down')
         if not self.bot_rodando:
             salvar_config(
                 self.api_key.text.strip(),
                 self.api_secret.text.strip(),
                 self.symbols.text.strip(),
-                self.valor_usdt.text.strip()
+                self.valor_usdt.text.strip(),
+                simulacao_ativa
             )
             self.wake_lock = adquirir_wake_lock()
             iniciar_foreground_service()
 
             self.bot_rodando = True
-            self.btn_toggle.text = "DESLIGAR ROBÔ"
+            self.btn_toggle.text = "DESLIGAR ROBÔ (24/7)"
             self.btn_toggle.background_color = (0.85, 0.2, 0.2, 1)
-            self.atualizar_status(">>> ROBÔ INICIADO COM SUCESSO! <<<")
+            modo_txt = "SIMULAÇÃO ($10k)" if simulacao_ativa else "REAL"
+            self.atualizar_status(f">>> ROBÔ INICIADO 24/7 EM MODO {modo_txt} <<<")
             threading.Thread(target=self.loop_principal_bot, daemon=True).start()
         else:
             self.bot_rodando = False
             parar_foreground_service()
             liberar_wake_lock(self.wake_lock)
 
-            self.btn_toggle.text = "LIGAR ROBÔ"
+            self.btn_toggle.text = "LIGAR ROBÔ (24/7)"
             self.btn_toggle.background_color = (0, 0.7, 0.3, 1)
-            self.atualizar_status("--- Robô desligado ---")
+            self.atualizar_status("--- Robô pausado ---")
 
     def loop_principal_bot(self):
         symbols_list = [s.strip().upper() for s in self.symbols.text.strip().split() if s.strip()]
         valor_ordem = float(self.valor_usdt.text.strip() or 12)
         cooldown = 120
+        simulacao_ativa = (self.btn_modo.state == 'down')
 
-        exchange = BinanceNativeAPI(self.api_key.text, self.api_secret.text)
+        exchange = BinanceNativeAPI(self.api_key.text, self.api_secret.text, simulacao=simulacao_ativa)
 
         for s in symbols_list:
             if s not in estado_por_par:
@@ -558,17 +633,16 @@ class BotTradingApp(App):
                     ma9 = media(closes, 9)
                     ma21 = media(closes, 21)
 
-                    saldo = exchange.fetch_balance()
+                    saldo = exchange.fetch_balance(saldo_virtual=self.saldo_simulado)
                     ativo = SYMBOL.split("/")[0]
                     qtd = saldo['free'].get(ativo, 0.0)
                     usdt = saldo['free'].get('USDT', 0.0)
 
                 except Exception as e:
-                    self.atualizar_status(f"[ERRO] Falha ao carregar ({SYMBOL}): {e}")
+                    self.atualizar_status(f"[ERRO] Falha ({SYMBOL}): {e}")
                     continue
 
-                # Sincroniza saldo do ativo com a memória do robô
-                sync_posicao(SYMBOL, preco, qtd, self)
+                sync_posicao(SYMBOL, preco, qtd, self, simulacao=simulacao_ativa)
 
                 em_operacao = (qtd > 0.0001) and (estado.get("preco_entrada", 0) > 0)
                 volatilidade = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
@@ -614,7 +688,6 @@ class BotTradingApp(App):
 
                 prob = prever_probabilidade(rsi, ma9, ma21, volatilidade, preco, tipo_entrada)
 
-                # --- EXIBIÇÃO DE POSIÇÃO E GANHOS ---
                 if em_operacao:
                     preco_ref = estado["preco_entrada"] if estado["preco_entrada"] > 0 else preco
                     lucro_pct = ((preco - preco_ref) / preco_ref) * 100
@@ -630,19 +703,19 @@ class BotTradingApp(App):
                     status_posicao = (
                         f"[POSICAO ABERTA]\n"
                         f"Entrada: {preco_ref:.2f} | Atual: {preco:.2f}\n"
-                        f"LUCRO ATUAL: {lucro_pct:+.2f}% (${lucro_usdt:+.2f} USDT)\n"
-                        f"Lucro Maximo: {lucro_max:.2f}% | Stop Loss: {preco_ref * 0.995:.2f}"
+                        f"LUCRO: {lucro_pct:+.2f}% (${lucro_usdt:+.2f} USDT)\n"
+                        f"Max: {lucro_max:.2f}% | Stop: {preco_ref * 0.995:.2f}"
                     )
                 else:
-                    status_posicao = "STATUS: SEM POSICAO ABERTA"
+                    status_posicao = "STATUS: SEM POSICAO"
 
                 bloco_log = (
                     f"============================== {SYMBOL}\n"
-                    f"MERCADO: Preco: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
-                    f"SALDO: USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
+                    f"Preco: {preco:.2f} | RSI: {rsi:.2f} | MA9: {ma9:.2f} | MA21: {ma21:.2f}\n"
+                    f"USDT: {usdt:.2f} | {ativo}: {qtd:.6f}\n"
                     f"{status_posicao}\n"
-                    f"ESTRATEGIA: Tend: {tendencia} | Pullback: {pullback} | Continuidade: {continuidade} | Rompimento: {rompimento}\n"
-                    f"Volatilidade: {volatilidade:.2f}% | Tempo OK: {tempo_ok} | Prob IA: {prob:.2f}"
+                    f"Tend: {tendencia} | Pull: {pullback} | Cont: {continuidade} | Romp: {rompimento}\n"
+                    f"Vol: {volatilidade:.2f}% | IA Prob: {prob:.2f}"
                 )
                 self.atualizar_status(bloco_log)
 
@@ -651,7 +724,7 @@ class BotTradingApp(App):
                     entrada_valida = (pullback or continuidade or rompimento) and volatilidade > 0.10
 
                     if entrada_valida and tempo_ok and (len(historico_ia) < 50 or prob > 0.55):
-                        self.atualizar_status(f"*** ENTRADA CONFIRMADA ({tipo_entrada.upper()}) | Prob IA: {prob:.2f} ***")
+                        self.atualizar_status(f"*** ENTRADA ({tipo_entrada.upper()}) | IA: {prob:.2f} ***")
                         try:
                             quantidade = valor_ordem / preco
                             order = exchange.create_market_buy_order(SYMBOL, quantidade, preco_estimado=preco)
@@ -671,11 +744,12 @@ class BotTradingApp(App):
                             estado["entrada_ma21"] = ma21
                             estado["entrada_distancia_ma"] = distancia_ma
                             estado["entrada_volatilidade"] = volatilidade
-                            estado["entrada_posicao_ma9"] = preco > ma9
-                            estado["entrada_posicao_ma21"] = preco > ma21
+
+                            if simulacao_ativa:
+                                self.saldo_simulado -= valor_ordem
 
                             salvar_estado()
-                            self.atualizar_status(f"[COMPRA EXECUTADA] {SYMBOL} @ {preco_executado:.2f}")
+                            self.atualizar_status(f"[COMPRA] {SYMBOL} @ {preco_executado:.2f}")
                         except Exception as e:
                             self.atualizar_status(f"[ERRO COMPRA] {SYMBOL}: {e}")
 
@@ -698,63 +772,36 @@ class BotTradingApp(App):
                     if preco <= stop_emergencia:
                         vender = True
                         motivo_venda = "STOP LOSS -0.5%"
-
                     elif (rsi < 38 and rsi < rsi_anterior and preco < ma9 and preco < preco_anterior and lucro < -0.25):
                         vender = True
-                        motivo_venda = "REVERSAO FORTE"
-
+                        motivo_venda = "REVERSAO"
                     elif (all(c < ma21 for c in closes[-3:]) and rsi < 43 and rsi < rsi_anterior and lucro < -0.35):
                         vender = True
-                        motivo_venda = "PERDEU TENDENCIA"
-
+                        motivo_venda = "PERDEU TEND"
                     elif lucro_max >= 0.35:
-                        if lucro_max < 0.70:
-                            lucro_travado = 0.10
-                        elif lucro_max < 1.05:
-                            lucro_travado = 0.35
-                        elif lucro_max < 1.40:
-                            lucro_travado = 0.70
-                        elif lucro_max < 1.75:
-                            lucro_travado = 1.05
-                        else:
-                            lucro_travado = lucro_max - 0.35
-
+                        lucro_travado = 0.10 if lucro_max < 0.70 else (0.35 if lucro_max < 1.05 else lucro_max - 0.35)
                         stop_dinamico = preco_ref * (1 + lucro_travado / 100)
-
                         if preco <= stop_dinamico:
                             vender = True
-                            motivo_venda = f"TRAILING STOP ({lucro_travado:.2f}%)"
+                            motivo_venda = f"TRAILING ({lucro_travado:.2f}%)"
 
                     if vender:
-                        self.atualizar_status(f"[VENDA DISPARADA] {SYMBOL}: {motivo_venda}")
+                        self.atualizar_status(f"[VENDA] {SYMBOL}: {motivo_venda}")
                         try:
                             order = exchange.create_market_sell_order(SYMBOL, qtd, preco_estimado=preco)
                             preco_saida = order.get('average') or preco
                             lucro_real = ((preco_saida - preco_ref) / preco_ref) * 100
 
-                            salvar_trade_relatorio(
-                                SYMBOL, estado, lucro_real, preco_saida, rsi, ma9, ma21, lucro_max
-                            )
+                            if simulacao_ativa:
+                                self.saldo_simulado += valor_ordem * (1 + lucro_real / 100)
 
-                            historico_ia.append({
-                                "tipo_entrada": estado.get("tipo_entrada", ""),
-                                "rsi": estado.get("entrada_rsi", 50),
-                                "volatilidade": estado.get("entrada_volatilidade", 0),
-                                "distancia_ma": estado.get("entrada_distancia_ma", 0),
-                                "posicao_preco_ma9": estado.get("entrada_posicao_ma9", True),
-                                "posicao_preco_ma21": estado.get("entrada_posicao_ma21", True),
-                                "forca_tendencia": abs(estado.get("entrada_distancia_ma", 0)),
-                                "resultado": lucro_real
-                            })
-                            salvar_dados_ia()
+                            salvar_trade_relatorio(SYMBOL, estado, lucro_real, preco_saida, rsi, ma9, ma21, lucro_max)
                             zerar_posicao_local(SYMBOL)
 
-                            self.atualizar_status(f"[RESULTADO FINAL] {SYMBOL}: {lucro_real:+.2f}%")
+                            self.atualizar_status(f"[RESULTADO] {SYMBOL}: {lucro_real:+.2f}%")
                         except Exception as e:
                             self.atualizar_status(f"[ERRO VENDA] {SYMBOL}: {e}")
-                            # Se o erro for quantidade inválida ou sem saldo (venda externa na Binance)
                             if "-1013" in str(e) or "Invalid quantity" in str(e):
-                                self.atualizar_status(f"[SYNC] Posição de {SYMBOL} já encerrada na Binance. Resetando estado local.")
                                 zerar_posicao_local(SYMBOL)
 
             time.sleep(10)

@@ -40,7 +40,7 @@ def main():
     srv = _servico()
     wl = _wake_lock(srv) if srv is not None else None
     try:
-        Motor(pasta_dados()).loop(ocioso_max=OCIOSO_MAX)
+        Motor(pasta_dados(), origem="servico").loop(ocioso_max=OCIOSO_MAX)
     except Exception:
         traceback.print_exc()
     finally:

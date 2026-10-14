@@ -787,7 +787,7 @@ def estado_padrao():
         "pos_sim": {}, "pos_real": {}, "robo_ativo": False,
         "regras": [{"par": p, "valor": 12, "estrategias": list(ESTRATEGIAS)}
                    for p in ("BTCUSDT", "SOLUSDT", "BNBUSDT")],
-        "execucoes": [], "ia": [], "ia_sim": [], "ultimo": {},
+        "execucoes": [], "ia": [], "ia_sim": [], "ultimo": {}, "pos_manual_real": {},
         "cfg": {"key": "", "secret": "", "testnet": True},
     }
 
@@ -1096,7 +1096,7 @@ class BotApp(App):
         box.add_widget(rolavel(lista))
         self.conteudo.add_widget(box)
         self.atualizar_markets()
-        self._ev = Clock.schedule_interval(lambda dt: self.atualizar_markets(), 6)
+        self._ev = Clock.schedule_interval(lambda dt: self.atualizar_markets(), 3)
 
     def abrir_busca(self):
         sym = normalizar_par(self.inp_busca.text)
@@ -1184,6 +1184,12 @@ class BotApp(App):
         lin.add_widget(bc)
         lin.add_widget(bv)
         ordem.add_widget(lin)
+        self.lbl_posinfo = txt("", 13, MUTED, False, "center", altura=22)
+        ordem.add_widget(self.lbl_posinfo)
+        be = RoundBtn(bg=RED, text="ENCERRAR POSIÇÃO", font_size=sp(16), size_hint_y=None,
+                      height=dp(52), radius=16)
+        be.bind(on_release=lambda *_: self.encerrar([self.par]))
+        ordem.add_widget(be)
         self.lbl_saldo = txt("", 14, MUTED, False, "center", altura=24)
         ordem.add_widget(self.lbl_saldo)
         auto_altura(ordem)
@@ -1192,7 +1198,7 @@ class BotApp(App):
         self.conteudo.add_widget(rolavel(box))
         self.atualizar_saldo_label()
         self.carregar_trade()
-        self._ev = Clock.schedule_interval(lambda dt: self.carregar_trade(), 6)
+        self._ev = Clock.schedule_interval(lambda dt: self.atualizar_trade(), 1)
 
     def atualizar_saldo_label(self):
         if self.lbl_saldo is None:
@@ -1219,17 +1225,32 @@ class BotApp(App):
         self.carregar_trade()
 
     def carregar_trade(self):
-        par, tf = self.par, TF_API[self.tf]
+        """Carga completa (troca de par/intervalo)."""
+        self.candles_trade = []
+        self._gen = getattr(self, "_gen", 0) + 1
+        self._busy = False
+        self._tk_ts = 0
+        self._var = None
+        self.atualizar_trade()
+
+    def atualizar_trade(self):
+        if getattr(self, "_busy", False):
+            return
+        par, tf, gen = self.par, TF_API[self.tf], self._gen
+        completo = not self.candles_trade
+        pedir_tk = completo or time.time() - self._tk_ts > 10
+        self._busy = True
 
         def job():
             try:
-                candles = buscar_klines(par, tf, 100)
-                tk = http_json("/api/v3/ticker/24hr", {"symbol": par})
+                lote = buscar_klines(par, tf, 100 if completo else 3)
+                tk = http_json("/api/v3/ticker/24hr", {"symbol": par}) if pedir_tk else None
             except Exception as e:
                 print("trade:", e)
 
                 def erro(dt):
-                    if self.aba == "trade" and par == self.par:
+                    self._busy = False
+                    if gen == self._gen and self.aba == "trade" and not self.candles_trade:
                         self.lbl_var.text = "par inválido ou sem conexão"
                         self.lbl_var.color = RED
 
@@ -1237,18 +1258,57 @@ class BotApp(App):
                 return
 
             def ui(dt):
-                if self.aba != "trade" or par != self.par:
+                self._busy = False
+                if self.aba != "trade" or gen != self._gen or not lote:
                     return
-                self.chart.set_data(candles)
-                self.preco_atual = candles[-1][3]
-                var = float(tk["priceChangePercent"])
-                self.lbl_preco.text = fmt_preco(float(tk["lastPrice"]))
-                self.lbl_var.text = "%s%.2f%%" % ("+" if var >= 0 else "", var)
-                self.lbl_var.color = GREEN if var >= 0 else RED
+                if completo:
+                    self.candles_trade = list(lote)
+                else:
+                    for c in lote:
+                        if c[4] == self.candles_trade[-1][4]:
+                            self.candles_trade[-1] = c
+                        elif c[4] > self.candles_trade[-1][4]:
+                            self.candles_trade.append(c)
+                    del self.candles_trade[:-150]
+                if tk:
+                    self._tk_ts = time.time()
+                    self._var = float(tk["priceChangePercent"])
+                self.chart.set_data(self.candles_trade)
+                self.preco_atual = self.candles_trade[-1][3]
+                self.lbl_preco.text = fmt_preco(self.preco_atual)
+                if self._var is not None:
+                    self.lbl_var.text = "%s%.2f%%" % ("+" if self._var >= 0 else "", self._var)
+                    self.lbl_var.color = GREEN if self._var >= 0 else RED
+                self.atualizar_posinfo()
 
             Clock.schedule_once(ui)
 
         threading.Thread(target=job, daemon=True).start()
+
+    def manual_d(self, modo=None):
+        modo = modo or self.estado["modo"]
+        return self.estado["posicoes"] if modo == "SIM" else self.estado["pos_manual_real"]
+
+    def atualizar_posinfo(self):
+        lb = getattr(self, "lbl_posinfo", None)
+        if self.aba != "trade" or lb is None:
+            return
+        est = self.estado
+        modo, sym = est["modo"], self.par
+        pos = (est["pos_sim"] if modo == "SIM" else est["pos_real"]).get(sym)
+        man = self.manual_d(modo).get(sym, 0.0)
+        partes, cor = [], MUTED
+        if pos:
+            if self.preco_atual:
+                lucro = (self.preco_atual / pos["entrada"] - 1) * 100
+                cor = GREEN if lucro >= 0 else RED
+                partes.append("Robô: entrada %s · %+.2f%%" % (fmt_preco(pos["entrada"]), lucro))
+            else:
+                partes.append("Robô: entrada %s" % fmt_preco(pos["entrada"]))
+        if man > 1e-12:
+            partes.append("Manual: %.6g" % man)
+        lb.text = "  |  ".join(partes) if partes else "Sem posição aberta neste par"
+        lb.color = cor
 
     def enviar_ordem(self, lado):
         est = self.estado
@@ -1288,6 +1348,13 @@ class BotApp(App):
                     livre = ex.saldo_livre().get(ex.info(sym)["base"], 0.0)
                     r = ex.vender(sym, min(valor / preco, livre))
                 with self.lock:
+                    man = self.estado["pos_manual_real"]
+                    if lado == "BUY":
+                        man[sym] = man.get(sym, 0.0) + r["qtd"]
+                    else:
+                        man[sym] = max(0.0, man.get(sym, 0.0) - r["qtd"])
+                        if man[sym] <= 1e-12:
+                            man.pop(sym, None)
                     self.registrar(lado, sym, "manual", "$%.2f" % (r["preco"] or preco), True)
                 self.salvar()
                 self.aviso_thread("%s executada em %s." % ("Compra" if lado == "BUY" else "Venda", par_fmt(sym)))
@@ -1320,6 +1387,9 @@ class BotApp(App):
         self.mostrar_sub(self.sub)
 
     def mostrar_sub(self, chave):
+        if self._ev:
+            self._ev.cancel()
+            self._ev = None
         self.sub = chave
         self.sw_robo = None
         self.lbl_robo_sub = None
@@ -1384,6 +1454,40 @@ class BotApp(App):
             card.add_widget(l2)
             box.add_widget(card)
 
+        modo = est["modo"]
+        pos_d = est["pos_sim"] if modo == "SIM" else est["pos_real"]
+        man = self.manual_d(modo)
+        abertas = list(pos_d) + [s for s, q in man.items() if q > 1e-12 and s not in pos_d]
+        self.lbl_pnl = {}
+        if abertas:
+            cab = BoxLayout(size_hint_y=None, height=dp(44))
+            cab.add_widget(txt("Posições abertas (%d)" % len(abertas), 22, TEXT, True))
+            if len(abertas) > 1:
+                bt = RoundBtn(bg=RED, text="Encerrar todas", font_size=sp(13), size_hint=(None, None),
+                              size=(dp(140), dp(40)), radius=14)
+                bt.bind(on_release=lambda *_: self.encerrar(abertas))
+                cab.add_widget(bt)
+            box.add_widget(cab)
+            for s in abertas:
+                p = pos_d.get(s)
+                c = Card(bg=CARD, radius=16, size_hint_y=None, height=dp(78),
+                         padding=[dp(18), dp(10)], spacing=dp(8))
+                tt = BoxLayout(orientation="vertical")
+                tt.add_widget(txt(par_fmt(s), 18, TEXT, True))
+                tt.add_widget(txt(("entrada %s · %s" % (fmt_preco(p["entrada"]), p["tipo"])) if p
+                                  else "manual · qtd %.6g" % man[s], 13, MUTED))
+                c.add_widget(tt)
+                lp = txt("—", 17, MUTED, True, "right", size_hint_x=None, width=dp(80))
+                c.add_widget(lp)
+                if p:
+                    self.lbl_pnl[s] = (lp, p["entrada"])
+                b = RoundBtn(bg=RED, text="Encerrar", font_size=sp(13), size_hint=(None, None),
+                             size=(dp(92), dp(40)), radius=14)
+                b.pos_hint = {"center_y": 0.5}
+                b.bind(on_release=lambda inst, x=s: self.encerrar([x]))
+                c.add_widget(b)
+                box.add_widget(c)
+
         box.add_widget(txt("Últimas execuções", 22, TEXT, True, altura=40))
         if not est["execucoes"]:
             box.add_widget(txt("Nenhuma execução ainda.", 15, MUTED, altura=30))
@@ -1396,7 +1500,111 @@ class BotApp(App):
             c.add_widget(txt(e["d"], 19, GREEN if e["ok"] else RED, True, "right"))
             box.add_widget(c)
         self._ult_exec = est["execucoes"][:1]
+        if self.lbl_pnl:
+            self.atualizar_pnl_posicoes()
+            self._ev = Clock.schedule_interval(lambda dt: self.atualizar_pnl_posicoes(), 4)
         return rolavel(box)
+
+    def atualizar_pnl_posicoes(self):
+        if self.aba != "bot" or self.sub != "robo" or not getattr(self, "lbl_pnl", None):
+            return
+        syms = list(self.lbl_pnl)
+
+        def job():
+            try:
+                res = http_json("/api/v3/ticker/price",
+                                {"symbols": json.dumps(syms, separators=(",", ":"))})
+            except Exception as e:
+                print("pnl:", e)
+                return
+            precos = {r["symbol"]: float(r["price"]) for r in res}
+
+            def ui(dt):
+                if self.aba != "bot" or self.sub != "robo":
+                    return
+                for s, (lb, ent) in self.lbl_pnl.items():
+                    if s in precos:
+                        v = (precos[s] / ent - 1) * 100
+                        lb.text = "%+.2f%%" % v
+                        lb.color = GREEN if v >= 0 else RED
+
+            Clock.schedule_once(ui)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def encerrar(self, simbolos):
+        """Encerra (vende a mercado) a posição do robô e/ou manual dos pares informados."""
+        simbolos = list(simbolos)
+        modo = self.estado["modo"]
+        if not simbolos:
+            return self.aviso("Nenhuma posição aberta.")
+        if modo == "REAL" and not self.cliente():
+            return self.aviso("Configure as chaves da Binance em Ajustes.")
+
+        def job():
+            msgs = []
+            for s in simbolos:
+                try:
+                    msgs.append(self.encerrar_sync(s, modo))
+                except Exception as e:
+                    msgs.append("%s: erro (%s)" % (par_fmt(s), str(e)[:100]))
+            self.salvar()
+
+            def ui(dt):
+                self.aviso("\n".join(msgs)[:300])
+                self.atualizar_barra()
+                self.atualizar_posinfo()
+                if self.aba == "bot" and self.sub == "robo":
+                    self.mostrar_sub("robo")
+                self.atualizar_saldo_real()
+
+            Clock.schedule_once(ui)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    def encerrar_sync(self, sym, modo):
+        est = self.estado
+        pos_d = est["pos_sim"] if modo == "SIM" else est["pos_real"]
+        man = self.manual_d(modo)
+        with self.lock:
+            pos = pos_d.get(sym)
+            qtd_man = man.get(sym, 0.0)
+            if not pos and qtd_man <= 1e-12:
+                return "%s: sem posição aberta." % par_fmt(sym)
+            if pos:
+                pos["encerrando"] = True
+        try:
+            if modo == "SIM":
+                ps = validar_par(sym)
+            else:
+                ex = self.cliente()
+                livre = ex.saldo_livre().get(ex.info(sym)["base"], 0.0)
+                total = (pos["qtd"] if pos else 0.0) + qtd_man
+                ps = ex.vender(sym, min(total, livre))["preco"]
+        except Exception as e:
+            with self.lock:
+                if pos:
+                    pos.pop("encerrando", None)
+            if modo == "REAL" and ("-1013" in str(e) or "Invalid quantity" in str(e)):
+                with self.lock:
+                    pos_d.pop(sym, None)
+                    man.pop(sym, None)
+                    self.registrar("SYNC", sym, "posição já encerrada ou abaixo do mínimo", "—", True)
+                return "%s: já estava encerrada na Binance (registro local limpo)." % par_fmt(sym)
+            raise
+        with self.lock:
+            if pos:
+                lucro = (ps / pos["entrada"] - 1) * 100
+                if modo == "SIM":
+                    est["saldo"] += pos["qtd"] * ps
+                pos_d.pop(sym, None)
+                self.registrar("SELL", sym, "ENCERRADA MANUAL", "%+.2f%%" % lucro, lucro >= 0)
+            if qtd_man > 1e-12:
+                if modo == "SIM":
+                    est["saldo"] += qtd_man * ps
+                man.pop(sym, None)
+                self.registrar("SELL", sym, "manual (encerrar)", "$%.2f" % ps, True)
+        return "%s encerrada @ %s" % (par_fmt(sym), fmt_preco(ps))
 
     def atualizar_sub_robo(self):
         if self.lbl_robo_sub is None:
@@ -1568,6 +1776,8 @@ class BotApp(App):
         pos = pos_d.get(sym)
 
         if pos:
+            if pos.get("encerrando"):
+                return
             if modo == "REAL":
                 base = ex.info(sym)["base"]
                 if livre.get(base, 0.0) < 0.0001:

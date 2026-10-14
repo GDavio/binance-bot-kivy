@@ -3,6 +3,7 @@ import os
 import random
 import threading
 import time
+from datetime import datetime
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -980,7 +981,8 @@ class BotApp(App):
             c = Card(bg=CARD, radius=16, size_hint_y=None, height=dp(70), padding=[dp(18), dp(10)])
             tt = BoxLayout(orientation="vertical")
             tt.add_widget(txt(e["t"], 18, TEXT, True))
-            tt.add_widget(txt(e["s"], 14, MUTED))
+            hora = (" · " + time.strftime("%d/%m %H:%M", time.localtime(e["ts"]))) if e.get("ts") else ""
+            tt.add_widget(txt(e["s"] + hora, 14, MUTED))
             c.add_widget(tt)
             c.add_widget(txt(e["d"], 19, GREEN if e["ok"] else RED, True, "right"))
             box.add_widget(c)
@@ -1030,15 +1032,20 @@ class BotApp(App):
         if self.lbl_robo_sub is None:
             return
         est = self.estado
+        agora = time.time()
         if self.msg_robo:
             t = self.msg_robo
         elif est["robo_ativo"]:
-            if time.time() - est.get("hb", 0) > 25:
-                t = "Iniciando o motor..."
+            idade = agora - est.get("hb", 0)
+            if idade > 25 or not est.get("origem"):
+                t = "Sem sinal do motor há %ds (iniciando ou parado)" % int(idade) if est.get("hb") else \
+                    "Iniciando o motor..."
             else:
-                onde = ("em segundo plano (serviço)" if self._modo_motor == "servico"
-                        else "neste aparelho (sem serviço)")
-                t = "Operando %s · %s" % (onde, "simulação" if est["modo"] == "SIM" else "REAL")
+                onde = "Serviço" if est["origem"] == "servico" else "Motor local (sem serviço)"
+                desde = datetime.fromtimestamp(est["inicio"]).strftime("%d/%m %H:%M")
+                ciclo = ("ciclo há %ds" % int(agora - est["ciclo_ts"])) if est.get("ciclo_ts") else "aguardando ciclo"
+                t = "%s ativo desde %s · %s · %s" % (
+                    onde, desde, ciclo, "simulação" if est["modo"] == "SIM" else "REAL")
         else:
             t = "Desligado"
         self.lbl_robo_sub.text = t
@@ -1147,7 +1154,7 @@ class BotApp(App):
             return
         self._modo_motor = "local"
         if self._thr_local is None or not self._thr_local.is_alive():
-            self._motor_local = Motor(self.pasta)
+            self._motor_local = Motor(self.pasta, origem="local")
             self._thr_local = threading.Thread(target=self._motor_local.loop, daemon=True)
             self._thr_local.start()
 

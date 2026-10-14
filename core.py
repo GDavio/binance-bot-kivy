@@ -438,7 +438,8 @@ ARQ_CONFIG = "config_ui.json"
 ARQ_ESTADO = "estado_app.json"
 CONFIG_KEYS = ("modo", "robo_ativo", "regras", "cfg")
 ESTADO_KEYS = ("saldo", "posicoes", "pos_sim", "pos_real", "pos_manual_real", "execucoes",
-               "ia", "ia_sim", "ultimo", "resultados", "msg_robo", "hb")
+               "ia", "ia_sim", "ultimo", "resultados", "msg_robo", "hb",
+               "origem", "inicio", "ciclo_ts")
 
 
 def config_padrao():
@@ -453,7 +454,7 @@ def config_padrao():
 def estado_servico_padrao():
     return {"saldo": 10000.0, "posicoes": {}, "pos_sim": {}, "pos_real": {}, "pos_manual_real": {},
             "execucoes": [], "ia": [], "ia_sim": [], "ultimo": {}, "resultados": {},
-            "msg_robo": "", "hb": 0}
+            "msg_robo": "", "hb": 0, "origem": "", "inicio": 0, "ciclo_ts": 0}
 
 
 def ler_json(path, padrao):
@@ -499,7 +500,8 @@ def caminho_relatorio(pasta):
 class Motor:
     """Roda no serviço Android (ou numa thread local, se o serviço não existir, ex.: Pydroid)."""
 
-    def __init__(self, pasta):
+    def __init__(self, pasta, origem="local"):
+        self.origem = origem          # "servico" (processo do serviço Android) ou "local"
         self.pasta = pasta
         self.arq_estado = os.path.join(pasta, ARQ_ESTADO)
         self.arq_config = os.path.join(pasta, ARQ_CONFIG)
@@ -570,7 +572,8 @@ class Motor:
     def registrar(self, lado, sym, motivo, direita, positivo):
         with self.lock:
             self.est["execucoes"].insert(0, {
-                "t": "%s %s" % (lado, sym), "s": motivo, "d": direita, "ok": bool(positivo)})
+                "t": "%s %s" % (lado, sym), "s": motivo, "d": direita, "ok": bool(positivo),
+                "ts": time.time()})
             del self.est["execucoes"][50:]
 
     def resultado(self, cid, msg):
@@ -733,6 +736,7 @@ class Motor:
                 erro = "[%s] %s" % (regra["par"], str(e)[:120])
         with self.lock:
             est["msg_robo"] = erro
+            est["ciclo_ts"] = time.time()
         self.salvar()
 
     def processar(self, regra, modo):
@@ -877,6 +881,11 @@ class Motor:
         if not self.tentar_travar():
             print("Motor já está em execução; saindo.")
             return
+        with self.lock:
+            # prova de vida: quem está rodando e desde quando
+            self.est["origem"] = self.origem
+            self.est["inicio"] = time.time()
+        self.salvar()
         try:
             while not self.parar.is_set():
                 try:
@@ -896,6 +905,8 @@ class Motor:
                     print("motor:", e)
                 self.parar.wait(1.0)
         finally:
+            with self.lock:
+                self.est["origem"] = ""      # motor parou (ex.: ociosidade)
             self.salvar()
             if self._fd_trava:
                 try:

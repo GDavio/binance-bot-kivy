@@ -72,12 +72,12 @@ def http_json(path, params=None, timeout=10, base=BASE_PUBLICA, headers=None, me
 
 
 def buscar_klines(symbol, intervalo, limit=100, inicio=None):
-    """Lista de (open, high, low, close, open_time_ms)."""
+    """Lista de (open, high, low, close, open_time_ms, volume)."""
     p = {"symbol": symbol, "interval": intervalo, "limit": limit}
     if inicio:
         p["startTime"] = int(inicio)
     res = http_json("/api/v3/klines", p)
-    return [(float(k[1]), float(k[2]), float(k[3]), float(k[4]), int(k[0])) for k in res]
+    return [(float(k[1]), float(k[2]), float(k[3]), float(k[4]), int(k[0]), float(k[5])) for k in res]
 
 
 def buscar_tickers(symbols):
@@ -351,7 +351,7 @@ def backtest_par(candles, ativas, p=None):
     p = dict(PARAMS, **(p or {}))
     trades, pos = [], None
     for i in range(30, len(candles)):
-        o, h, l, c, t = candles[i]
+        o, h, l, c, t = candles[i][:5]
         janela = [x[3] for x in candles[max(0, i - 49):i + 1]]
         if pos:
             # 1) stop atingido dentro do candle (usa o topo dos candles anteriores)
@@ -406,6 +406,242 @@ def resumo_trades(trades, valor, dias=None):
 
 
 # ----------------------------------------------------------------------------
+# MODELO "DIA" (day trade): sinais em 5m, tendência em 15m, VWAP do dia (UTC) e volume relativo
+# Base: guias de day trade (pullback em EMA20/21 com 15m como tendência, VWAP, volume menor no recuo,
+# vela de confirmação), regras de RSI de Cardwell/Brown (recuos em 40-50 numa alta) e rompimento de
+# máxima de N velas com volume >= 1,5x a média (Donchian). Só compra (spot).
+# ----------------------------------------------------------------------------
+TF_DIA = "5m"
+MS5 = 300000
+
+
+def _ema(vals, p):
+    out = [None] * len(vals)
+    if len(vals) < p:
+        return out
+    k = 2.0 / (p + 1)
+    e = sum(vals[:p]) / p
+    out[p - 1] = e
+    for i in range(p, len(vals)):
+        e = vals[i] * k + e * (1 - k)
+        out[i] = e
+    return out
+
+
+def _atr(h, l, c, p=14):
+    n = len(c)
+    out = [None] * n
+    if n <= p:
+        return out
+    tr = [None] * n
+    for i in range(1, n):
+        tr[i] = max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1]))
+    a = sum(tr[1:p + 1]) / p
+    out[p] = a
+    for i in range(p + 1, n):
+        a = (a * (p - 1) + tr[i]) / p
+        out[i] = a
+    return out
+
+
+def _vwap_dia(c5):
+    """VWAP acumulado desde 00:00 UTC; precisa de >= 4 velas no dia."""
+    out = [None] * len(c5)
+    dia, pv, vv, ini = None, 0.0, 0.0, 0
+    for i, cd in enumerate(c5):
+        h, l, c, t, v = cd[1], cd[2], cd[3], cd[4], cd[5]
+        d = t // 86400000
+        if d != dia:
+            dia, pv, vv, ini = d, 0.0, 0.0, i
+        pv += (h + l + c) / 3.0 * v
+        vv += v
+        out[i] = pv / vv if vv > 0 and i - ini >= 3 else None
+    return out
+
+
+def _ctx15(c5):
+    """True quando, no 15m (montado a partir do 5m, só blocos já fechados), EMA21 > EMA50 e fechamento > EMA50."""
+    n = len(c5)
+    ctx = [False] * n
+    cl, e21, e50 = [], None, None
+    k21, k50 = 2.0 / 22, 2.0 / 51
+    for i in range(n):
+        if c5[i][4] % 900000 == 600000:          # 3ª vela de 5m do bloco: o 15m fechou
+            cl.append(c5[i][3])
+            m = len(cl)
+            if m == 21:
+                e21 = sum(cl) / 21
+            elif m > 21:
+                e21 = cl[-1] * k21 + e21 * (1 - k21)
+            if m == 50:
+                e50 = sum(cl) / 50
+            elif m > 50:
+                e50 = cl[-1] * k50 + e50 * (1 - k50)
+        if e21 is not None and e50 is not None:
+            ctx[i] = e21 > e50 and cl[-1] > e50
+    return ctx
+
+
+def preparar_dia(c5):
+    """Pré-calcula indicadores de uma lista de velas 5m FECHADAS (o, h, l, c, t, v)."""
+    n = len(c5)
+    o = [x[0] for x in c5]
+    h = [x[1] for x in c5]
+    l = [x[2] for x in c5]
+    c = [x[3] for x in c5]
+    t = [x[4] for x in c5]
+    v = [x[5] for x in c5]
+    return {"o": o, "h": h, "l": l, "c": c, "t": t, "v": v,
+            "ema9": _ema(c, 9), "ema21": _ema(c, 21), "ema50": _ema(c, 50),
+            "rsi": serie_rsi(c), "atr": _atr(h, l, c),
+            "vavg": [None] * 20 + [sum(v[i - 20:i]) / 20 for i in range(20, n)],
+            "vwap": _vwap_dia(c5), "ctx": _ctx15(c5)}
+
+
+def sinais_dia(d, i, p=None):
+    """Avalia as três entradas na vela fechada de índice i.
+    Retorna {"pullback","continuidade","rompimento": bool, "falhas": {nome: 1º motivo que falhou}, "info": {...}}."""
+    p = dict(PARAMS, **(p or {}))
+    res = {"pullback": False, "continuidade": False, "rompimento": False, "falhas": {}, "info": {}}
+    nomes = ESTRATEGIAS
+
+    def falha_geral(motivo):
+        for nm in nomes:
+            res["falhas"][nm] = motivo
+        return res
+
+    if i < 60:
+        return falha_geral("histórico curto (< 60 velas)")
+    o, h, l, c, v = d["o"][i], d["h"][i], d["l"][i], d["c"][i], d["v"][i]
+    atr, e9, e21, e50 = d["atr"][i - 1], d["ema9"][i], d["ema21"][i], d["ema50"][i]   # ATR da vela anterior
+    rsi, rsi_a, vw, va = d["rsi"][i], d["rsi"][i - 1], d["vwap"][i], d["vavg"][i]
+    if None in (atr, e9, e21, e50, rsi, rsi_a, va) or va <= 0 or atr <= 0:
+        return falha_geral("dados insuficientes")
+    atr_pct = atr / c * 100
+    rvol = v / va
+    res["info"] = {"preco": c, "rsi": rsi, "atr_pct": atr_pct, "rvol": rvol, "vwap": vw,
+                   "ema9": e9, "ema21": e21, "ema50": e50, "ctx15": d["ctx"][i]}
+    if not d["ctx"][i]:
+        return falha_geral("sem tendência de alta no 15m (EMA21 > EMA50 e preço > EMA50)")
+    if vw is None:
+        return falha_geral("VWAP do dia ainda sem dados (primeiras velas do dia UTC)")
+    if c <= vw:
+        return falha_geral("fechou abaixo do VWAP do dia")
+    if atr_pct < p["vol_min"]:
+        return falha_geral("ATR%% baixo (%.3f%% < %.2f%%)" % (atr_pct, p["vol_min"]))
+
+    def checar(nome, regras):
+        for motivo, ok in regras:
+            if not ok:
+                res["falhas"][nome] = motivo
+                return False
+        res[nome] = True
+        return True
+
+    lows, highs, closes, vols = d["l"], d["h"], d["c"], d["v"]
+
+    # ---- PULLBACK: recuo até a EMA21 numa alta, volume menor, RSI ~40-50 e vela de confirmação
+    K = 8
+    jan = range(i - K, i)
+    min_low = min(lows[j] for j in jan)
+    idx_min = max(j for j in jan if lows[j] == min_low)
+    pico = max(highs[j] for j in range(i - 24, i))
+    idx_pico = max(j for j in range(i - 24, i) if highs[j] == pico)
+    rsi_min = min(d["rsi"][j] for j in jan)
+    vol_rec = (sum(vols[idx_pico + 1:i]) / max(1, i - idx_pico - 1)) if i - idx_pico > 1 else 0.0
+    checar("pullback", [
+        ("topo anterior não veio antes do fundo do recuo", idx_pico < idx_min and i - idx_pico >= 3),
+        ("recuo fora de 0,7–3,5 ATR", 0.7 <= (pico - min_low) / atr <= 3.5),
+        ("recuo não chegou na EMA21", any(lows[j] <= d["ema21"][j] * 1.001 for j in jan)),
+        ("recuo perdeu a EMA50", min_low >= d["ema50"][idx_min] * 0.998),
+        ("RSI não desceu até ~50 no recuo", rsi_min <= 50),
+        ("RSI caiu abaixo de 30 no recuo", rsi_min >= 30),
+        ("RSI não está virando para cima", rsi > rsi_a and rsi >= 45),
+        ("volume do recuo acima da média", vol_rec <= va),
+        ("sem vela de confirmação (alta, acima da máxima anterior e da EMA21)",
+         c > o and c > highs[i - 1] and c > e21)])
+
+    # ---- CONTINUIDADE: impulso + bandeira curta acima da EMA21 e saída pela máxima da bandeira
+    Kf = 4
+    fl = range(i - Kf, i)
+    f_high = max(highs[j] for j in fl)
+    f_low = min(lows[j] for j in fl)
+    pre_low = min(lows[j] for j in range(i - 16, i - Kf))
+    checar("continuidade", [
+        ("médias fora de ordem (EMA9 > EMA21 > EMA50) ou preço abaixo da EMA9", e9 > e21 > e50 and c > e9),
+        ("sem impulso anterior (>= 1,5 ATR)", closes[i - Kf - 1] - pre_low >= 1.5 * atr),
+        ("bandeira larga (> 1,2 ATR)", f_high - f_low <= 1.2 * atr),
+        ("bandeira perdeu a EMA21", f_low > e21),
+        ("RSI fora de 50–80", 50 <= rsi <= 80),
+        ("não fechou acima da máxima da bandeira com vela de alta", c > f_high and c > o),
+        ("volume abaixo da média no rompimento da bandeira", rvol >= 1.0)])
+
+    # ---- ROMPIMENTO: máxima de 20 velas após consolidação, volume >= 1,5x e fechamento forte
+    N = 20
+    nivel = max(highs[j] for j in range(i - N, i))
+    faixa = max(highs[i - 12:i]) - min(lows[i - 12:i])
+    checar("rompimento", [
+        ("não fechou acima da máxima de 20 velas (+0,1 ATR)", c >= nivel + 0.1 * atr),
+        ("sem consolidação antes (faixa de 12 velas > 3,5 ATR)", faixa <= 3.5 * atr),
+        ("volume abaixo de 1,5x a média", rvol >= 1.5),
+        ("fechamento fraco (rejeição)", c > o and c >= l + 0.6 * (h - l))])
+    return res
+
+
+def escolher_tipo_dia(res, ativas):
+    """Prioridade: pullback > continuidade > rompimento (só as ligadas)."""
+    for nome in ESTRATEGIAS:
+        if nome in ativas and res.get(nome):
+            return nome
+    return None
+
+
+def velas_fechadas(candles, agora_ms=None):
+    agora_ms = agora_ms or int(time.time() * 1000)
+    if candles and candles[-1][4] + MS5 > agora_ms:
+        return candles[:-1]
+    return candles
+
+
+def backtest_dia(c5, ativas, p=None, t_ini=0):
+    """Backtest do modelo dia sobre velas 5m fechadas. Entra no fechamento da vela do sinal.
+    Saídas: as mesmas (stop fixo, trailing escada, reversão forte, perdeu tendência)."""
+    p = dict(PARAMS, **(p or {}))
+    d = preparar_dia(c5)
+    trades, pos = [], None
+    for i in range(60, len(c5)):
+        o, h, l, c, t = c5[i][:5]
+        if pos:
+            px, motivo, _ = nivel_stop(pos["entrada"], pos["topo"], p)
+            if l <= px:
+                saida = min(px, o)
+            else:
+                pos["topo"] = max(pos["topo"], h)
+                motivo = decidir_saida(pos["entrada"], pos["topo"], c, d["c"][max(0, i - 49):i + 1], p)
+                saida = c
+                if not motivo:
+                    continue
+            trades.append({"lucro": (saida / pos["entrada"] - 1) * 100, "motivo": motivo,
+                           "tipo": pos["tipo"]})
+            pos = None
+        elif t >= t_ini:
+            tipo = escolher_tipo_dia(sinais_dia(d, i, p), ativas)
+            if tipo:
+                pos = {"entrada": c, "topo": c, "tipo": tipo}
+    return trades
+
+
+def diagnostico_dia(sym, p=None):
+    """Busca 5m recentes e devolve (dados, índice, sinais) da última vela fechada."""
+    fech = velas_fechadas(buscar_klines(sym, TF_DIA, 300))
+    if len(fech) < 120:
+        raise Exception("poucos candles")
+    d = preparar_dia(fech)
+    i = len(fech) - 1
+    return d, i, sinais_dia(d, i, p)
+
+
+# ----------------------------------------------------------------------------
 # Formatação / pares
 # ----------------------------------------------------------------------------
 def fmt_preco(p):
@@ -456,7 +692,7 @@ def lista_pares(texto, maximo=8):
 # ----------------------------------------------------------------------------
 ARQ_CONFIG = "config_ui.json"
 ARQ_ESTADO = "estado_app.json"
-CONFIG_KEYS = ("modo", "robo_ativo", "regras", "cfg")
+CONFIG_KEYS = ("modo", "robo_ativo", "regras", "cfg", "modelo")
 ESTADO_KEYS = ("saldo", "posicoes", "pos_sim", "pos_real", "pos_manual_real", "execucoes",
                "ia", "ia_sim", "ultimo", "resultados", "msg_robo", "hb",
                "origem", "inicio", "ciclo_ts")
@@ -465,6 +701,7 @@ ESTADO_KEYS = ("saldo", "posicoes", "pos_sim", "pos_real", "pos_manual_real", "e
 def config_padrao():
     return {
         "modo": "SIM", "robo_ativo": False,
+        "modelo": "dia",          # "dia" = entradas novas (5m/15m); "antigo" = entradas de 1m
         "regras": [{"par": p, "valor": 12, "estrategias": list(ESTRATEGIAS)}
                    for p in ("BTCUSDT", "SOLUSDT", "BNBUSDT")],
         "cfg": {"key": "", "secret": "", "testnet": True},
@@ -760,6 +997,89 @@ class Motor:
         self.salvar()
 
     def processar(self, regra, modo):
+        if self.config.get("modelo", "dia") == "dia":
+            return self.processar_dia(regra, modo)
+        return self.processar_antigo(regra, modo)
+
+    def processar_dia(self, regra, modo):
+        """Entradas novas (5m + 15m + VWAP + volume). Saídas iguais às antigas, calculadas também em 5m."""
+        est = self.est
+        sym = regra["par"]
+        pos_d = est["pos_sim"] if modo == "SIM" else est["pos_real"]
+        candles = buscar_klines(sym, TF_DIA, 300)
+        agora_ms = int(time.time() * 1000)
+        fech = velas_fechadas(candles, agora_ms)
+        if len(fech) < 120:
+            return
+        preco = candles[-1][3]
+        closes = [x[3] for x in fech][-49:] + [preco]
+        ex, livre = None, {}
+        if modo == "REAL":
+            ex = self.cliente()
+            if not ex:
+                raise Exception("configure as chaves em Ajustes")
+            livre = ex.saldo_livre()
+        pos = pos_d.get(sym)
+
+        if pos:
+            if pos.get("encerrando"):
+                return
+            if modo == "REAL":
+                base = ex.info(sym)["base"]
+                if livre.get(base, 0.0) < 0.0001:
+                    with self.lock:
+                        pos_d.pop(sym, None)
+                    self.registrar("SYNC", sym, "posição encerrada na Binance", "—", True)
+                    self.salvar()
+                    return
+            with self.lock:
+                pos["topo"] = max(pos["topo"], preco)
+            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes)
+            if motivo:
+                self.fechar(sym, pos, preco, motivo, closes, modo, ex, livre)
+            return
+
+        d = preparar_dia(fech)
+        i = len(fech) - 1
+        sinais = sinais_dia(d, i)
+        tipo = escolher_tipo_dia(sinais, regra.get("estrategias", ESTRATEGIAS))
+        if not tipo:
+            return
+        if agora_ms - (fech[-1][4] + MS5) > 90000:      # sinal "velho": não persegue
+            return
+        if preco > fech[-1][3] * 1.002:                  # já subiu demais desde o fechamento do sinal
+            return
+        chave = "%s:%s" % (modo, sym)
+        if time.time() - est["ultimo"].get(chave, 0) <= COOLDOWN:
+            return
+        valor = float(regra["valor"])
+        if valor <= 0:
+            return
+        if modo == "SIM":
+            with self.lock:
+                if est["saldo"] < valor:
+                    return
+                est["saldo"] -= valor
+                preco_exec, qtd = preco, valor / preco
+        else:
+            quote = ex.info(sym)["quote"]
+            if livre.get(quote, 0.0) < valor:
+                return
+            r = ex.comprar(sym, valor)
+            preco_exec, qtd = r["preco"] or preco, r["qtd"]
+        inf = sinais["info"]
+        with self.lock:
+            pos_d[sym] = {
+                "entrada": preco_exec, "topo": preco_exec, "t": time.time(), "qtd": qtd,
+                "valor": valor, "tipo": tipo, "modelo": "dia", "rsi": inf["rsi"], "ma9": inf["ema9"],
+                "ma21": inf["ema21"], "vol": inf["atr_pct"],
+                "dist": (inf["ema9"] - inf["ema21"]) / inf["ema21"] * 100,
+                "p9": preco > inf["ema9"], "p21": preco > inf["ema21"]}
+            est["ultimo"][chave] = time.time()
+            self.registrar("BUY", sym, tipo, "$%.2f" % preco_exec, True)
+        self.salvar()
+
+    def processar_antigo(self, regra, modo):
         est = self.est
         sym = regra["par"]
         pos_d = est["pos_sim"] if modo == "SIM" else est["pos_real"]
@@ -801,7 +1121,7 @@ class Motor:
         chave = "%s:%s" % (modo, sym)
         if time.time() - est["ultimo"].get(chave, 0) <= COOLDOWN:
             return
-        hist = self.hist(modo)
+        hist = [h for h in self.hist(modo) if h.get("modelo", "antigo") == "antigo"]
         prob = prever_probabilidade(hist, a["rsi"], a["ma9"], a["ma21"], a["vol"], preco,
                                     tipo_prioritario(a))
         if not (len(hist) < IA_MIN_HIST or prob > PROB_MIN):
@@ -857,7 +1177,7 @@ class Motor:
                 "tipo_entrada": pos["tipo"], "rsi": pos["rsi"], "volatilidade": pos["vol"],
                 "distancia_ma": pos["dist"], "posicao_preco_ma9": pos["p9"],
                 "posicao_preco_ma21": pos["p21"], "forca_tendencia": abs(pos["dist"]),
-                "resultado": lucro})
+                "modelo": pos.get("modelo", "antigo"), "resultado": lucro})
             del self.hist(modo)[:-500]
             pos_d.pop(sym, None)
             self.registrar("SELL", sym, motivo, "%+.2f%%" % lucro, lucro >= 0)

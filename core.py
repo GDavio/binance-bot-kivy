@@ -29,7 +29,10 @@ VOL_MIN = 0.10        # volatilidade mínima (%) para entrar
 PROB_MIN = 0.55       # filtro da IA (só vale depois de IA_MIN_HIST trades)
 IA_MIN_HIST = 50
 STOP_PCT = 0.5        # stop loss fixo (antes de o trailing ativar)
-TRAIL_ATIVA = 0.35    # lucro máximo (%) que ativa o trailing escada
+TRAIL_ATIVA = 0.45    # lucro máximo (%) que ativa o trailing escada (antes 0,35)
+TRAIL_TRAVA = 0.25    # 1º degrau do trailing: trava +0,25% (antes +0,10%)
+TAXA_IDA_VOLTA = 0.2  # % de taxa por operação (0,1% por lado)
+PARAMS = {"vol_min": VOL_MIN, "trail_ativa": TRAIL_ATIVA, "trail_trava": TRAIL_TRAVA}
 ESTRATEGIAS = ["pullback", "continuidade", "rompimento"]
 ROTULO = {"pullback": "Pullback", "continuidade": "Continuidade", "rompimento": "Rompimento"}
 INTERVALO_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
@@ -231,9 +234,10 @@ def analisar(closes):
             "continuidade": continuidade, "rompimento": rompimento}
 
 
-def escolher_entrada(a, ativas):
+def escolher_entrada(a, ativas, vol_min=None):
     """Prioridade: pullback > continuidade > rompimento (só as estratégias ligadas)."""
-    if a is None or a["vol"] <= VOL_MIN:
+    vm = VOL_MIN if vol_min is None else vol_min
+    if a is None or a["vol"] <= vm:
         return None
     for nome in ESTRATEGIAS:
         if nome in ativas and a[nome]:
@@ -280,23 +284,25 @@ def prever_probabilidade(hist, rsi, ma9, ma21, vol, preco, tipo):
 #   2) DEPOIS do trailing ativar -> TRAILING ESCADA passa a ser a principal
 #   3) Em seguida (2ª camada)    -> REVERSAO FORTE e PERDEU TENDENCIA
 # ----------------------------------------------------------------------------
-def trava_trailing(lucro_max):
+def trava_trailing(lucro_max, trava1=None):
+    t1 = TRAIL_TRAVA if trava1 is None else trava1
     if lucro_max < 0.70:
-        return 0.10
+        return t1
     if lucro_max < 1.05:
-        return 0.35
+        return max(t1, 0.35)
     if lucro_max < 1.40:
-        return 0.70
+        return max(t1, 0.70)
     if lucro_max < 1.75:
-        return 1.05
-    return lucro_max - 0.35
+        return max(t1, 1.05)
+    return max(t1, lucro_max - 0.35)
 
 
-def nivel_stop(entrada, topo):
-    """(preço do stop, motivo, trailing_ativo)."""
+def nivel_stop(entrada, topo, p=None):
+    """(preço do stop, motivo, trailing_ativo). p = parâmetros (padrão: PARAMS)."""
+    p = p or PARAMS
     lucro_max = (topo / entrada - 1) * 100
-    if lucro_max >= TRAIL_ATIVA:
-        t = trava_trailing(lucro_max)
+    if lucro_max >= p["trail_ativa"]:
+        t = trava_trailing(lucro_max, p["trail_trava"])
         return entrada * (1 + t / 100), "TRAILING STOP (%.2f%%)" % t, True
     return entrada * (1 - STOP_PCT / 100), "STOP LOSS -%.1f%%" % STOP_PCT, False
 
@@ -312,8 +318,8 @@ def saida_secundaria(entrada, preco, closes, a):
     return None
 
 
-def decidir_saida(entrada, topo, preco, closes):
-    px, motivo, _ = nivel_stop(entrada, topo)
+def decidir_saida(entrada, topo, preco, closes, p=None):
+    px, motivo, _ = nivel_stop(entrada, topo, p)
     if preco <= px:
         return motivo
     a = analisar(closes)
@@ -340,20 +346,22 @@ def baixar_candles(sym, intervalo, dias):
     return out
 
 
-def backtest_par(candles, ativas):
+def backtest_par(candles, ativas, p=None):
+    """p = {"vol_min", "trail_ativa", "trail_trava"}; o que faltar usa o padrão (PARAMS)."""
+    p = dict(PARAMS, **(p or {}))
     trades, pos = [], None
     for i in range(30, len(candles)):
         o, h, l, c, t = candles[i]
         janela = [x[3] for x in candles[max(0, i - 49):i + 1]]
         if pos:
             # 1) stop atingido dentro do candle (usa o topo dos candles anteriores)
-            px, motivo, _ = nivel_stop(pos["entrada"], pos["topo"])
+            px, motivo, _ = nivel_stop(pos["entrada"], pos["topo"], p)
             if l <= px:
                 saida = min(px, o)
             else:
                 # 2) atualiza topo e avalia no fechamento (stop/trailing atualizado + 2ª camada)
                 pos["topo"] = max(pos["topo"], h)
-                motivo = decidir_saida(pos["entrada"], pos["topo"], c, janela)
+                motivo = decidir_saida(pos["entrada"], pos["topo"], c, janela, p)
                 saida = c
                 if not motivo:
                     continue
@@ -361,28 +369,40 @@ def backtest_par(candles, ativas):
                            "tipo": pos["tipo"]})
             pos = None
         else:
-            tipo = escolher_entrada(analisar(janela), ativas)
+            tipo = escolher_entrada(analisar(janela), ativas, p["vol_min"])
             if tipo:
                 pos = {"entrada": c, "topo": c, "tipo": tipo}
     return trades
 
 
-def resumo_trades(trades, valor):
+def _grupo(trades, chave):
+    g = {}
+    for t in trades:
+        g.setdefault(chave(t), []).append(t["lucro"])
+    return sorted(g.items(), key=lambda x: -len(x[1]))
+
+
+def resumo_trades(trades, valor, dias=None):
     n = len(trades)
     lucros = [t["lucro"] for t in trades]
-    ganhos = len([x for x in lucros if x > 0])
     soma = sum(lucros)
-    taxa = soma - 0.2 * n
-    mot = {}
-    for t in trades:
-        k = t["motivo"].split(" (")[0]
-        mot[k] = mot.get(k, 0) + 1
-    ms = " · ".join("%s %d" % (k, v) for k, v in sorted(mot.items(), key=lambda x: -x[1]))
-    return n, soma, ("%d op · acerto %.0f%%\nSoma %+.2f%% (≈ %+.2f USDT)\n"
-                     "Com taxa 0,1%%/lado: %+.2f%% (≈ %+.2f USDT)\n"
-                     "Melhor %+.2f%% · Pior %+.2f%%\nSaídas: %s"
-                     % (n, ganhos / n * 100, soma, valor * soma / 100, taxa, valor * taxa / 100,
-                        max(lucros), min(lucros), ms))
+    liq = soma - TAXA_IDA_VOLTA * n
+    por_dia = " (%.1f/dia)" % (n / dias) if dias else ""
+    linhas = [
+        "%d op%s · acerto %.0f%%" % (n, por_dia, len([x for x in lucros if x > 0]) / n * 100),
+        "Por op: %+.3f%% bruto · %+.3f%% c/ taxa" % (soma / n, liq / n),
+        "Soma %+.2f%% (≈ %+.2f USDT)" % (soma, valor * soma / 100),
+        "C/ taxa 0,1%%/lado: %+.2f%% (≈ %+.2f USDT)" % (liq, valor * liq / 100),
+        "Melhor %+.2f%% · Pior %+.2f%%" % (max(lucros), min(lucros)),
+        "Por estratégia:"]
+    for k, v in _grupo(trades, lambda t: t["tipo"]):
+        m = sum(v) / len(v)
+        linhas.append("  %s: %d op · acerto %.0f%% · média %+.3f%% (c/ taxa %+.3f%%)" % (
+            k, len(v), len([x for x in v if x > 0]) / len(v) * 100, m, m - TAXA_IDA_VOLTA))
+    linhas.append("Por saída:")
+    for k, v in _grupo(trades, lambda t: t["motivo"].split(" (")[0]):
+        linhas.append("  %s: %d · média %+.2f%% · soma %+.1f%%" % (k, len(v), sum(v) / len(v), sum(v)))
+    return n, soma, "\n".join(linhas)
 
 
 # ----------------------------------------------------------------------------

@@ -329,7 +329,11 @@ class BotApp(App):
         self._thr_local = None
         self._bat_pedido = False
         self.bt = {"pares": "BTCUSDT", "estr": list(ESTRATEGIAS), "dias": "7d",
-                   "int": "15m", "valor": "100"}
+                   "int": "15m", "valor": "100",
+                   "vol": "%.2f" % VOL_MIN, "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA}
+        self.filtro_exec = None
+        self.exec_box = None
+        self.btn_f = {}
 
         root = BoxLayout(orientation="vertical")
         root.add_widget(self.montar_barra())
@@ -975,22 +979,57 @@ class BotApp(App):
                 box.add_widget(c)
 
         box.add_widget(txt("Últimas execuções", 22, TEXT, True, altura=40))
-        if not est["execucoes"]:
-            box.add_widget(txt("Nenhuma execução ainda.", 15, MUTED, altura=30))
-        for e in est["execucoes"][:20]:
-            c = Card(bg=CARD, radius=16, size_hint_y=None, height=dp(70), padding=[dp(18), dp(10)])
-            tt = BoxLayout(orientation="vertical")
-            tt.add_widget(txt(e["t"], 18, TEXT, True))
-            hora = (" · " + time.strftime("%d/%m %H:%M", time.localtime(e["ts"]))) if e.get("ts") else ""
-            tt.add_widget(txt(e["s"] + hora, 14, MUTED))
-            c.add_widget(tt)
-            c.add_widget(txt(e["d"], 19, GREEN if e["ok"] else RED, True, "right"))
-            box.add_widget(c)
+        exs = est["execucoes"]
+        nb = len([e for e in exs if e["t"].startswith("BUY")])
+        ns = len([e for e in exs if e["t"].startswith("SELL")])
+        filtro = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(10))
+        self.btn_f = {}
+        for k, rot, qtd in (("BUY", "Buy", nb), ("SELL", "Sell", ns)):
+            b = RoundBtn(text="%s (%d)" % (rot, qtd), font_size=sp(15))
+            b.bind(on_release=lambda inst, kk=k: self.filtrar_exec(kk))
+            self.btn_f[k] = b
+            filtro.add_widget(b)
+        box.add_widget(filtro)
+        self.exec_box = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
+        auto_altura(self.exec_box)
+        box.add_widget(self.exec_box)
+        self.montar_execucoes()
         self._ult_exec = est["execucoes"][:1]
         if self.lbl_pnl:
             self.atualizar_pnl_posicoes()
             self._ev = Clock.schedule_interval(lambda dt: self.atualizar_pnl_posicoes(), 4)
         return rolavel(box)
+
+    def filtrar_exec(self, lado):
+        """Toca em Buy ou Sell para filtrar; toca de novo para voltar a mostrar tudo."""
+        self.filtro_exec = None if self.filtro_exec == lado else lado
+        self.montar_execucoes()
+
+    def montar_execucoes(self):
+        if self.exec_box is None:
+            return
+        for k, b in self.btn_f.items():
+            on = self.filtro_exec == k
+            b.estilo(YELLOW if on else CARD2, DARK if on else TEXT)
+        self.exec_box.clear_widgets()
+        exs = [e for e in self.estado["execucoes"]
+               if not self.filtro_exec or e["t"].startswith(self.filtro_exec)]
+        if not exs:
+            self.exec_box.add_widget(txt("Nenhuma execução%s." % (
+                " deste tipo" if self.filtro_exec else " ainda"), 15, MUTED, altura=30))
+        for e in exs[:30]:
+            c = Card(bg=CARD, radius=16, size_hint_y=None, height=dp(70), padding=[dp(18), dp(10)])
+            tt = BoxLayout(orientation="vertical")
+            tt.add_widget(txt(e["t"], 18, TEXT, True))
+            tt.add_widget(txt(e["s"], 14, MUTED))
+            c.add_widget(tt)
+            dir_ = BoxLayout(orientation="vertical", size_hint_x=None, width=dp(112))
+            dir_.add_widget(txt(e["d"], 19, GREEN if e["ok"] else RED, True, "right"))
+            if e.get("ts"):
+                dir_.add_widget(txt(time.strftime("%d/%m %H:%M", time.localtime(e["ts"])),
+                                    12, MUTED, False, "right"))
+            c.add_widget(dir_)
+            self.exec_box.add_widget(c)
 
     def atualizar_pnl_posicoes(self):
         if self.aba != "bot" or self.sub != "robo" or not getattr(self, "lbl_pnl", None):
@@ -1325,6 +1364,16 @@ class BotApp(App):
         bv = campo_numero(self.bt["valor"], 20)
         bv.bind(text=lambda w, v: self.bt.__setitem__("valor", v))
         c.add_widget(bv)
+        c.add_widget(txt("Parâmetros do teste (%)", 15, MUTED, altura=22))
+        lin = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
+        for chave, rot in (("vol", "Volat. mín."), ("ativa", "Trailing ativa"), ("trava", "Trailing trava")):
+            col = BoxLayout(orientation="vertical", spacing=dp(2))
+            col.add_widget(txt(rot, 12, MUTED, altura=18))
+            f = campo_numero(self.bt[chave], 18)
+            f.bind(text=lambda w, v, k=chave: self.bt.__setitem__(k, v))
+            col.add_widget(f)
+            lin.add_widget(col)
+        c.add_widget(lin)
         run = RoundBtn(bg=YELLOW, fg=DARK, text="Rodar backtest", font_size=sp(18),
                        size_hint_y=None, height=dp(58), radius=18)
         run.bind(on_release=lambda *_: self.executar_backtest())
@@ -1340,10 +1389,18 @@ class BotApp(App):
         pares = lista_pares(self.bt["pares"])
         if not pares:
             return self.aviso("Digite ao menos um par.")
-        try:
-            valor = float(self.bt["valor"] or 100)
-        except ValueError:
-            valor = 100.0
+
+        def num(k, padrao):
+            try:
+                return float(self.bt.get(k) or padrao)
+            except ValueError:
+                return padrao
+
+        valor = num("valor", 100.0)
+        p = {"vol_min": num("vol", VOL_MIN), "trail_ativa": num("ativa", TRAIL_ATIVA),
+             "trail_trava": num("trava", TRAIL_TRAVA)}
+        if p["trail_trava"] >= p["trail_ativa"]:
+            return self.aviso("O trailing deve travar abaixo de onde ativa (ex.: ativa 0.45, trava 0.25).")
         dias, inter = int(self.bt["dias"][:-1]), self.bt["int"]
         ativas = list(self.bt["estr"])
         self.mostrar_card(self.bt_out, "Rodando backtest...")
@@ -1360,23 +1417,24 @@ class BotApp(App):
                     if len(candles) < 40:
                         partes.append("%s: poucos candles (par novo ou inválido)." % sym)
                         continue
-                    trades = backtest_par(candles, ativas)
+                    trades = backtest_par(candles, ativas, p)
                 except Exception as e:
                     partes.append("%s: erro (%s)" % (sym, str(e)[:80]))
                     continue
                 if not trades:
                     partes.append("%s: nenhuma operação." % sym)
                     continue
-                n, soma, texto = resumo_trades(trades, valor)
+                n, soma, texto = resumo_trades(trades, valor, dias)
                 tot_n += n
                 tot_soma += soma
                 partes.append("%s · %s" % (sym, texto))
-            cab = "%s · %d dias · %s · %s\n" % (
-                " ".join(ROTULO[e] for e in ativas), dias, inter, "" if len(pares) == 1 else
-                "%d pares" % len(pares))
+            cab = "%s · %d dias · %s\nVolat. mín. %.2f%% · trailing ativa %.2f%% / trava %.2f%%\n\n" % (
+                " ".join(ROTULO[e] for e in ativas), dias, inter,
+                p["vol_min"], p["trail_ativa"], p["trail_trava"])
             if len(pares) > 1 and tot_n:
-                partes.append("TOTAL: %d op · soma %+.2f%% (≈ %+.2f USDT)" % (
-                    tot_n, tot_soma, valor * tot_soma / 100))
+                liq = tot_soma - TAXA_IDA_VOLTA * tot_n
+                partes.append("TOTAL: %d op · soma %+.2f%% (≈ %+.2f USDT) · c/ taxa %+.2f%% (≈ %+.2f USDT)" % (
+                    tot_n, tot_soma, valor * tot_soma / 100, liq, valor * liq / 100))
             rodape = "\n\nExecução no fechamento do candle; stop/trailing checados na mínima. " \
                      "Sem filtro de IA e sem slippage."
             msg = cab + "\n\n".join(partes) + rodape

@@ -330,7 +330,8 @@ class BotApp(App):
         self._bat_pedido = False
         self.bt = {"pares": "BTCUSDT", "estr": list(ESTRATEGIAS), "dias": "7d",
                    "int": "15m", "valor": "100",
-                   "vol": "%.2f" % VOL_MIN, "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA}
+                   "vol": "%.2f" % VOL_MIN, "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA,
+                   "modelo": "dia"}
         self.filtro_exec = None
         self.exec_box = None
         self.btn_f = {}
@@ -910,6 +911,11 @@ class BotApp(App):
         c1.add_widget(self.sw_robo)
         box.add_widget(c1)
         self.atualizar_sub_robo()
+        box.add_widget(txt("Entradas do robô", 15, MUTED, altura=22))
+        rot_mod = {"dia": "Dia (5m)", "antigo": "Antigas (1m)"}
+        box.add_widget(chip_row(list(rot_mod.values()), rot_mod.get(est.get("modelo", "dia"), "Dia (5m)"),
+                                lambda r: self.trocar_modelo("dia" if r.startswith("Dia") else "antigo"),
+                                altura=44, tam=14))
 
         topo = BoxLayout(size_hint_y=None, height=dp(48))
         topo.add_widget(txt("Regras (%d)" % len(est["regras"]), 22, TEXT, True))
@@ -1175,6 +1181,12 @@ class BotApp(App):
             self.garantir_motor()
             self.pedir_ignorar_bateria()
 
+    def trocar_modelo(self, modelo):
+        """Escolhe as entradas do robô ao vivo: 'dia' (5m + 15m + VWAP + volume) ou 'antigo' (1m)."""
+        self.estado["modelo"] = modelo
+        self.salvar()
+        self.aviso("Entradas do robô: %s." % ("Dia (5m)" if modelo == "dia" else "Antigas (1m)"))
+
     def desligar_robo(self):
         """Só marca como desligado; quem chama grava a config (salvar)."""
         if not self.estado["robo_ativo"]:
@@ -1305,8 +1317,32 @@ class BotApp(App):
         self.ia_inp.text = sym
         self.mostrar_card(self.ia_out, "Analisando %s..." % sym)
         modo = self.estado["modo"]
+        modelo = self.estado.get("modelo", "dia")
 
         def job():
+            if modelo == "dia":
+                try:
+                    d, i, sin = diagnostico_dia(sym)
+                except Exception:
+                    msg = "Não consegui analisar %s (par inválido, sem conexão ou poucos candles)." % sym
+                    Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
+                    return
+                inf = sin["info"]
+                tipo = escolher_tipo_dia(sin, ESTRATEGIAS)
+                linhas = []
+                for nm in ESTRATEGIAS:
+                    linhas.append("%s: %s" % (ROTULO[nm], "SIM" if sin[nm] else "não — " + sin["falhas"].get(nm, "?")))
+                msg = ("%s · 5m (última vela fechada)\nPreço: %s\nRSI14: %.1f · ATR: %.3f%% · volume rel.: %.2fx\n"
+                       "EMA9: %.4f · EMA21: %.4f · EMA50: %.4f\nVWAP do dia: %s · tendência 15m: %s\n\n%s\n\n"
+                       "Sinal: %s\n\nRegras de day trade (pullback na EMA21, bandeira, máxima de 20 velas com volume). "
+                       "Não é recomendação."
+                       % (sym, fmt_preco(inf.get("preco", 0)), inf.get("rsi", 0), inf.get("atr_pct", 0),
+                          inf.get("rvol", 0), inf.get("ema9", 0), inf.get("ema21", 0), inf.get("ema50", 0),
+                          fmt_preco(inf["vwap"]) if inf.get("vwap") else "—",
+                          "alta" if inf.get("ctx15") else "sem alta", "\n".join(linhas),
+                          ("COMPRA (%s)" % tipo) if tipo else "AGUARDAR"))
+                Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
+                return
             try:
                 closes = [c[3] for c in buscar_klines(sym, "1m", 50)]
                 a = analisar(closes)
@@ -1316,14 +1352,14 @@ class BotApp(App):
                 msg = "Não consegui analisar %s (par inválido ou sem conexão)." % sym
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
                 return
-            hist = self.hist(modo)
+            hist = [h for h in self.hist(modo) if h.get("modelo", "antigo") == "antigo"]
             tipo = tipo_prioritario(a)
             prob = prever_probabilidade(hist, a["rsi"], a["ma9"], a["ma21"], a["vol"], a["preco"], tipo)
             liberado = len(hist) < IA_MIN_HIST or prob > PROB_MIN
             ent = escolher_entrada(a, ESTRATEGIAS)
             sinal = ("COMPRA (%s)" % ent) if ent and liberado else (
                 "Gatilho %s, mas a IA bloqueou" % ent if ent else "AGUARDAR")
-            msg = ("%s · 1m\nPreço: %s\nRSI14: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
+            msg = ("%s · 1m (entradas antigas)\nPreço: %s\nRSI14: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
                    "Tendência: %s · volatilidade %.2f%%\n"
                    "Pullback: %s · Continuidade: %s · Rompimento: %s\n"
                    "Prob. IA: %.2f (%d trades no histórico)\n\nSinal: %s\n\n"
@@ -1351,13 +1387,18 @@ class BotApp(App):
         self.bt_pares = campo_texto(self.bt["pares"], "ex.: BTCUSDT PEPEUSDT SOLUSDT", 17)
         self.bt_pares.bind(text=lambda w, v: self.bt.__setitem__("pares", v))
         c.add_widget(self.bt_pares)
+        c.add_widget(txt("Modelo de entradas", 15, MUTED, altura=22))
+        rot_bt = {"dia": "Dia (5m)", "antigo": "Antigas"}
+        c.add_widget(chip_row(list(rot_bt.values()), rot_bt.get(self.bt["modelo"], "Dia (5m)"),
+                              lambda r: self.bt.__setitem__("modelo", "dia" if r.startswith("Dia") else "antigo"),
+                              altura=46, tam=14))
         c.add_widget(txt("Regras de entrada", 15, MUTED, altura=22))
         c.add_widget(toggle_row([(k, ROTULO[k]) for k in ESTRATEGIAS], self.bt["estr"],
                                 lambda lst: self.bt.__setitem__("estr", lst), altura=46, tam=13))
         c.add_widget(txt("Período", 15, MUTED, altura=22))
         c.add_widget(chip_row(["3d", "7d", "14d", "30d"], self.bt["dias"],
                               lambda k: self.bt.__setitem__("dias", k), altura=48, tam=15))
-        c.add_widget(txt("Intervalo", 15, MUTED, altura=22))
+        c.add_widget(txt("Intervalo (só nas entradas Antigas; o modelo Dia usa 5m + 15m)", 15, MUTED, altura=40))
         c.add_widget(chip_row(["1m", "5m", "15m", "1h", "4h"], self.bt["int"],
                               lambda k: self.bt.__setitem__("int", k), altura=48, tam=15))
         c.add_widget(txt("Valor por ordem (USDT)", 15, MUTED, altura=22))
@@ -1401,7 +1442,9 @@ class BotApp(App):
              "trail_trava": num("trava", TRAIL_TRAVA)}
         if p["trail_trava"] >= p["trail_ativa"]:
             return self.aviso("O trailing deve travar abaixo de onde ativa (ex.: ativa 0.45, trava 0.25).")
-        dias, inter = int(self.bt["dias"][:-1]), self.bt["int"]
+        dias = int(self.bt["dias"][:-1])
+        modelo = self.bt.get("modelo", "dia")
+        inter = "5m" if modelo == "dia" else self.bt["int"]
         ativas = list(self.bt["estr"])
         self.mostrar_card(self.bt_out, "Rodando backtest...")
 
@@ -1413,11 +1456,20 @@ class BotApp(App):
             for i, sym in enumerate(pares):
                 prog("Rodando %s (%d/%d)..." % (sym, i + 1, len(pares)))
                 try:
-                    candles = baixar_candles(sym, inter, dias)
-                    if len(candles) < 40:
-                        partes.append("%s: poucos candles (par novo ou inválido)." % sym)
-                        continue
-                    trades = backtest_par(candles, ativas, p)
+                    if modelo == "dia":
+                        # baixa 2 dias a mais só para "aquecer" os indicadores (15m, EMA50, VWAP)
+                        t_ini = int(time.time() * 1000) - dias * 86400000
+                        candles = velas_fechadas(baixar_candles(sym, "5m", dias + 2))
+                        if len(candles) < 200:
+                            partes.append("%s: poucos candles (par novo ou inválido)." % sym)
+                            continue
+                        trades = backtest_dia(candles, ativas, p, t_ini)
+                    else:
+                        candles = baixar_candles(sym, inter, dias)
+                        if len(candles) < 40:
+                            partes.append("%s: poucos candles (par novo ou inválido)." % sym)
+                            continue
+                        trades = backtest_par(candles, ativas, p)
                 except Exception as e:
                     partes.append("%s: erro (%s)" % (sym, str(e)[:80]))
                     continue
@@ -1428,9 +1480,9 @@ class BotApp(App):
                 tot_n += n
                 tot_soma += soma
                 partes.append("%s · %s" % (sym, texto))
-            cab = "%s · %d dias · %s\nVolat. mín. %.2f%% · trailing ativa %.2f%% / trava %.2f%%\n\n" % (
-                " ".join(ROTULO[e] for e in ativas), dias, inter,
-                p["vol_min"], p["trail_ativa"], p["trail_trava"])
+            cab = "Entradas %s · %s · %d dias · %s\n%s %.2f%% · trailing ativa %.2f%% / trava %.2f%%\n\n" % (
+                "Dia" if modelo == "dia" else "Antigas", " ".join(ROTULO[e] for e in ativas), dias, inter,
+                "ATR mín." if modelo == "dia" else "Volat. mín.", p["vol_min"], p["trail_ativa"], p["trail_trava"])
             if len(pares) > 1 and tot_n:
                 liq = tot_soma - TAXA_IDA_VOLTA * tot_n
                 partes.append("TOTAL: %d op · soma %+.2f%% (≈ %+.2f USDT) · c/ taxa %+.2f%% (≈ %+.2f USDT)" % (

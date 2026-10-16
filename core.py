@@ -32,7 +32,13 @@ STOP_PCT = 0.5        # stop loss fixo (antes de o trailing ativar)
 TRAIL_ATIVA = 0.45    # lucro máximo (%) que ativa o trailing escada (antes 0,35)
 TRAIL_TRAVA = 0.25    # 1º degrau do trailing: trava +0,25% (antes +0,10%)
 TAXA_IDA_VOLTA = 0.2  # % de taxa por operação (0,1% por lado)
-PARAMS = {"vol_min": VOL_MIN, "trail_ativa": TRAIL_ATIVA, "trail_trava": TRAIL_TRAVA}
+PARAMS = {"vol_min": VOL_MIN, "trail_ativa": TRAIL_ATIVA, "trail_trava": TRAIL_TRAVA,
+          "stop_pct": STOP_PCT, "stop_max": 0.8, "escala": 1.0}
+# Perfil 5m: stop e escada proporcionais ao ATR de 5m do par (com piso nos valores padrão)
+K_STOP = 2.0          # stop = 2 x ATR%  (entre stop_pct e stop_max)
+K_ATIVA = 2.5         # trailing ativa em 2,5 x ATR%
+ATIVA_MAX = 1.2       # teto da ativação do trailing (%)
+TRAVA_FRAC = 0.55     # 1º degrau trava ~55% da ativação (mínimo trail_trava)
 ESTRATEGIAS = ["pullback", "continuidade", "rompimento"]
 ROTULO = {"pullback": "Pullback", "continuidade": "Continuidade", "rompimento": "Rompimento"}
 INTERVALO_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
@@ -284,36 +290,53 @@ def prever_probabilidade(hist, rsi, ma9, ma21, vol, preco, tipo):
 #   2) DEPOIS do trailing ativar -> TRAILING ESCADA passa a ser a principal
 #   3) Em seguida (2ª camada)    -> REVERSAO FORTE e PERDEU TENDENCIA
 # ----------------------------------------------------------------------------
-def trava_trailing(lucro_max, trava1=None):
+def trava_trailing(lucro_max, trava1=None, esc=1.0):
+    """Degraus da escada; esc=1 é a escada padrão. Em esc>1 todos os degraus ficam proporcionalmente maiores."""
     t1 = TRAIL_TRAVA if trava1 is None else trava1
-    if lucro_max < 0.70:
+    if lucro_max < 0.70 * esc:
         return t1
-    if lucro_max < 1.05:
-        return max(t1, 0.35)
-    if lucro_max < 1.40:
-        return max(t1, 0.70)
-    if lucro_max < 1.75:
-        return max(t1, 1.05)
-    return max(t1, lucro_max - 0.35)
+    if lucro_max < 1.05 * esc:
+        return max(t1, 0.35 * esc)
+    if lucro_max < 1.40 * esc:
+        return max(t1, 0.70 * esc)
+    if lucro_max < 1.75 * esc:
+        return max(t1, 1.05 * esc)
+    return max(t1, lucro_max - 0.35 * esc)
 
 
 def nivel_stop(entrada, topo, p=None):
     """(preço do stop, motivo, trailing_ativo). p = parâmetros (padrão: PARAMS)."""
     p = p or PARAMS
+    stop = p.get("stop_pct", STOP_PCT)
     lucro_max = (topo / entrada - 1) * 100
     if lucro_max >= p["trail_ativa"]:
-        t = trava_trailing(lucro_max, p["trail_trava"])
+        t = trava_trailing(lucro_max, p["trail_trava"], p.get("escala", 1.0))
         return entrada * (1 + t / 100), "TRAILING STOP (%.2f%%)" % t, True
-    return entrada * (1 - STOP_PCT / 100), "STOP LOSS -%.1f%%" % STOP_PCT, False
+    return entrada * (1 - stop / 100), "STOP LOSS -%.2f%%" % stop, False
 
 
-def saida_secundaria(entrada, preco, closes, a):
+def params_atr(atr_pct, base=None):
+    """Parâmetros de saída proporcionais à volatilidade (ATR% de 5m) do par, fixados na entrada."""
+    b = dict(PARAMS, **(base or {}))
+    smin = b["stop_pct"]
+    smax = max(smin, b.get("stop_max", 0.8))
+    stop = min(max(K_STOP * atr_pct, smin), smax)
+    a0, t0 = b["trail_ativa"], b["trail_trava"]
+    ativa = min(max(K_ATIVA * atr_pct, a0), max(a0, ATIVA_MAX))
+    trava = min(max(t0, TRAVA_FRAC * ativa), ativa - 0.05)
+    b.update(stop_pct=stop, trail_ativa=ativa, trail_trava=trava, escala=(ativa / a0 if a0 > 0 else 1.0))
+    return b
+
+
+def saida_secundaria(entrada, preco, closes, a, p=None):
+    k = (p or PARAMS).get("stop_pct", STOP_PCT) / STOP_PCT     # proporcional ao stop
     lucro = (preco / entrada - 1) * 100
-    if a["rsi"] < 38 and a["rsi"] < a["rsi_ant"] and preco < a["ma9"] and preco < a["ant"] and lucro < -0.25:
+    if (a["rsi"] < 38 and a["rsi"] < a["rsi_ant"] and preco < a["ma9"] and preco < a["ant"]
+            and lucro < -0.25 * k):
         return "REVERSAO FORTE"
     ma21 = a["ma21"]
     if (all(c < ma21 for c in closes[-3:]) and a["rsi"] < 43 and a["rsi"] < a["rsi_ant"]
-            and lucro < -0.35):
+            and lucro < -0.35 * k):
         return "PERDEU TENDENCIA"
     return None
 
@@ -325,7 +348,7 @@ def decidir_saida(entrada, topo, preco, closes, p=None):
     a = analisar(closes)
     if a is None:
         return None
-    return saida_secundaria(entrada, preco, closes, a)
+    return saida_secundaria(entrada, preco, closes, a, p)
 
 
 # ----------------------------------------------------------------------------
@@ -400,7 +423,7 @@ def resumo_trades(trades, valor, dias=None):
         linhas.append("  %s: %d op · acerto %.0f%% · média %+.3f%% (c/ taxa %+.3f%%)" % (
             k, len(v), len([x for x in v if x > 0]) / len(v) * 100, m, m - TAXA_IDA_VOLTA))
     linhas.append("Por saída:")
-    for k, v in _grupo(trades, lambda t: t["motivo"].split(" (")[0]):
+    for k, v in _grupo(trades, lambda t: re.sub(r" -[\d.]+%$", "", t["motivo"].split(" (")[0])):
         linhas.append("  %s: %d · média %+.2f%% · soma %+.1f%%" % (k, len(v), sum(v) / len(v), sum(v)))
     return n, soma, "\n".join(linhas)
 
@@ -603,21 +626,27 @@ def velas_fechadas(candles, agora_ms=None):
     return candles
 
 
-def backtest_dia(c5, ativas, p=None, t_ini=0):
-    """Backtest do modelo dia sobre velas 5m fechadas. Entra no fechamento da vela do sinal.
-    Saídas: as mesmas (stop fixo, trailing escada, reversão forte, perdeu tendência)."""
+def backtest_dia(c5, ativas, p=None, t_ini=0, stats=None):
+    """Backtest do perfil 5m sobre velas 5m fechadas. Entra no fechamento da vela do sinal.
+    Stop/escada proporcionais ao ATR% do momento da entrada (p["prop"]=False usa os valores fixos).
+    stats (dict opcional) recebe atr_medio, stop_medio e ativa_media."""
     p = dict(PARAMS, **(p or {}))
+    prop = p.pop("prop", True)
     d = preparar_dia(c5)
     trades, pos = [], None
+    atrs, stops, ativas_l = [], [], []
     for i in range(60, len(c5)):
         o, h, l, c, t = c5[i][:5]
+        if t >= t_ini and d["atr"][i] is not None:
+            atrs.append(d["atr"][i] / c * 100)
         if pos:
-            px, motivo, _ = nivel_stop(pos["entrada"], pos["topo"], p)
+            pp = pos["p"]
+            px, motivo, _ = nivel_stop(pos["entrada"], pos["topo"], pp)
             if l <= px:
                 saida = min(px, o)
             else:
                 pos["topo"] = max(pos["topo"], h)
-                motivo = decidir_saida(pos["entrada"], pos["topo"], c, d["c"][max(0, i - 49):i + 1], p)
+                motivo = decidir_saida(pos["entrada"], pos["topo"], c, d["c"][max(0, i - 49):i + 1], pp)
                 saida = c
                 if not motivo:
                     continue
@@ -625,9 +654,17 @@ def backtest_dia(c5, ativas, p=None, t_ini=0):
                            "tipo": pos["tipo"]})
             pos = None
         elif t >= t_ini:
-            tipo = escolher_tipo_dia(sinais_dia(d, i, p), ativas)
+            sin = sinais_dia(d, i, p)
+            tipo = escolher_tipo_dia(sin, ativas)
             if tipo:
-                pos = {"entrada": c, "topo": c, "tipo": tipo}
+                pp = params_atr(sin["info"]["atr_pct"], p) if prop else p
+                stops.append(pp["stop_pct"])
+                ativas_l.append(pp["trail_ativa"])
+                pos = {"entrada": c, "topo": c, "tipo": tipo, "p": pp}
+    if stats is not None:
+        stats["atr_medio"] = sum(atrs) / len(atrs) if atrs else 0.0
+        stats["stop_medio"] = sum(stops) / len(stops) if stops else None
+        stats["ativa_media"] = sum(ativas_l) / len(ativas_l) if ativas_l else None
     return trades
 
 
@@ -1034,7 +1071,7 @@ class Motor:
                     return
             with self.lock:
                 pos["topo"] = max(pos["topo"], preco)
-            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes)
+            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"))
             if motivo:
                 self.fechar(sym, pos, preco, motivo, closes, modo, ex, livre)
             return
@@ -1062,7 +1099,10 @@ class Motor:
                 est["saldo"] -= valor
                 preco_exec, qtd = preco, valor / preco
         else:
-            quote = ex.info(sym)["quote"]
+            inf_s = ex.info(sym)
+            quote = inf_s["quote"]
+            if valor < inf_s["minn"]:
+                raise Exception("ordem de %.2f abaixo do mínimo da Binance para %s (%.2f)" % (valor, sym, inf_s["minn"]))
             if livre.get(quote, 0.0) < valor:
                 return
             r = ex.comprar(sym, valor)
@@ -1074,7 +1114,8 @@ class Motor:
                 "valor": valor, "tipo": tipo, "modelo": "dia", "rsi": inf["rsi"], "ma9": inf["ema9"],
                 "ma21": inf["ema21"], "vol": inf["atr_pct"],
                 "dist": (inf["ema9"] - inf["ema21"]) / inf["ema21"] * 100,
-                "p9": preco > inf["ema9"], "p21": preco > inf["ema21"]}
+                "p9": preco > inf["ema9"], "p21": preco > inf["ema21"],
+                "p": params_atr(inf["atr_pct"])}          # stop/escada fixos desta operação
             est["ultimo"][chave] = time.time()
             self.registrar("BUY", sym, tipo, "$%.2f" % preco_exec, True)
         self.salvar()
@@ -1108,7 +1149,7 @@ class Motor:
                     return
             with self.lock:
                 pos["topo"] = max(pos["topo"], preco)
-            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes)
+            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"))
             if motivo:
                 self.fechar(sym, pos, preco, motivo, closes, modo, ex, livre)
             return
@@ -1136,7 +1177,10 @@ class Motor:
                 est["saldo"] -= valor
                 preco_exec, qtd = preco, valor / preco
         else:
-            quote = ex.info(sym)["quote"]
+            inf_s = ex.info(sym)
+            quote = inf_s["quote"]
+            if valor < inf_s["minn"]:
+                raise Exception("ordem de %.2f abaixo do mínimo da Binance para %s (%.2f)" % (valor, sym, inf_s["minn"]))
             if livre.get(quote, 0.0) < valor:
                 return
             r = ex.comprar(sym, valor)
@@ -1145,7 +1189,8 @@ class Motor:
             pos_d[sym] = {
                 "entrada": preco_exec, "topo": preco_exec, "t": time.time(), "qtd": qtd,
                 "valor": valor, "tipo": tipo, "rsi": a["rsi"], "ma9": a["ma9"], "ma21": a["ma21"],
-                "vol": a["vol"], "dist": a["dist"], "p9": preco > a["ma9"], "p21": preco > a["ma21"]}
+                "vol": a["vol"], "dist": a["dist"], "p9": preco > a["ma9"], "p21": preco > a["ma21"],
+                "p": dict(PARAMS)}
             est["ultimo"][chave] = time.time()
             self.registrar("BUY", sym, tipo, "$%.2f" % preco_exec, True)
         self.salvar()

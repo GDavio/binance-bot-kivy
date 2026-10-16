@@ -33,7 +33,14 @@ TRAIL_ATIVA = 0.45    # lucro máximo (%) que ativa o trailing escada (antes 0,3
 TRAIL_TRAVA = 0.25    # 1º degrau do trailing: trava +0,25% (antes +0,10%)
 TAXA_IDA_VOLTA = 0.2  # % de taxa por operação (0,1% por lado)
 PARAMS = {"vol_min": VOL_MIN, "trail_ativa": TRAIL_ATIVA, "trail_trava": TRAIL_TRAVA,
-          "stop_pct": STOP_PCT, "stop_max": 0.8, "escala": 1.0}
+          "stop_pct": STOP_PCT, "stop_max": 0.8, "escala": 1.0,
+          # Perfil 1m (entradas antigas): MA 9/21 simples, RSI 9, ATR 9
+          "ma_tipo": "sma", "ma_f": 9, "ma_s": 21, "rsi_p": 9, "atr_p": 9}
+# Perfil 5m (entradas Dia): MA 9/21 exponenciais, RSI 14, ATR 14
+PERFIL_DIA = {"ma_tipo": "ema", "ma_f": 9, "ma_s": 21, "rsi_p": 14, "atr_p": 14}
+# Saída "perdeu tendência": cruzamento das médias para baixo + RSI <= 40 e caindo (antes < 43)
+TREND_RSI = 40
+TREND_ATR_SEP = 0.1   # separação mínima entre as médias, em ATR, para valer o cruzamento
 # Perfil 5m: stop e escada proporcionais ao ATR de 5m do par (com piso nos valores padrão)
 K_STOP = 2.0          # stop = 2 x ATR%  (entre stop_pct e stop_max)
 K_ATIVA = 2.5         # trailing ativa em 2,5 x ATR%
@@ -216,12 +223,12 @@ def serie_rsi(closes, p=14):
 # ----------------------------------------------------------------------------
 # ESTRATÉGIA: entradas
 # ----------------------------------------------------------------------------
-def analisar(closes):
+def analisar(closes, rsi_p=14):
     """Indicadores + os três gatilhos de entrada. Use as últimas ~50 closes."""
     if len(closes) < 30:
         return None
     preco, ant = closes[-1], closes[-2]
-    rsi, rsi_ant = calcular_rsi(closes), calcular_rsi(closes[:-1])
+    rsi, rsi_ant = calcular_rsi(closes, rsi_p), calcular_rsi(closes[:-1], rsi_p)
     ma9, ma21 = media(closes, 9), media(closes, 21)
     vol = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
     dist = (ma9 - ma21) / ma21 * 100
@@ -324,31 +331,58 @@ def params_atr(atr_pct, base=None):
     a0, t0 = b["trail_ativa"], b["trail_trava"]
     ativa = min(max(K_ATIVA * atr_pct, a0), max(a0, ATIVA_MAX))
     trava = min(max(t0, TRAVA_FRAC * ativa), ativa - 0.05)
+    b.update(PERFIL_DIA)
     b.update(stop_pct=stop, trail_ativa=ativa, trail_trava=trava, escala=(ativa / a0 if a0 > 0 else 1.0))
     return b
 
 
-def saida_secundaria(entrada, preco, closes, a, p=None):
-    k = (p or PARAMS).get("stop_pct", STOP_PCT) / STOP_PCT     # proporcional ao stop
+def indicadores_saida(velas, q):
+    """MA rápida/lenta, RSI e ATR com os períodos do perfil da posição. velas = (o, h, l, c, ...)."""
+    c = [x[3] for x in velas]
+    h = [x[1] for x in velas]
+    l = [x[2] for x in velas]
+    pf, ps = q.get("ma_f", 9), q.get("ma_s", 21)
+    if q.get("ma_tipo", "sma") == "ema":
+        mf, ms = _ema(c, pf)[-1], _ema(c, ps)[-1]
+    else:
+        mf, ms = (media(c, pf), media(c, ps)) if len(c) >= ps else (None, None)
+    rp = q.get("rsi_p", 14)
+    rsi, rsi_ant = calcular_rsi(c, rp), calcular_rsi(c[:-1], rp)
+    atr = _atr(h, l, c, q.get("atr_p", 14))[-1]
+    return mf, ms, rsi, rsi_ant, atr
+
+
+def perdeu_tendencia(mf, ms, rsi, rsi_ant, atr, lucro, k=1.0):
+    """Média rápida cruzou abaixo da lenta (com separação >= 0,1 ATR), RSI <= 40 e caindo, em prejuízo."""
+    if None in (mf, ms, atr) or atr <= 0:
+        return False
+    return (mf < ms and (ms - mf) >= TREND_ATR_SEP * atr
+            and rsi <= TREND_RSI and rsi < rsi_ant and lucro < -0.35 * k)
+
+
+def saida_secundaria(entrada, preco, closes, a, p=None, velas=None):
+    q = p or PARAMS
+    k = q.get("stop_pct", STOP_PCT) / STOP_PCT     # proporcional ao stop
     lucro = (preco / entrada - 1) * 100
     if (a["rsi"] < 38 and a["rsi"] < a["rsi_ant"] and preco < a["ma9"] and preco < a["ant"]
             and lucro < -0.25 * k):
         return "REVERSAO FORTE"
-    ma21 = a["ma21"]
-    if (all(c < ma21 for c in closes[-3:]) and a["rsi"] < 43 and a["rsi"] < a["rsi_ant"]
-            and lucro < -0.35 * k):
-        return "PERDEU TENDENCIA"
+    if velas and len(velas) >= 30:
+        mf, ms, rsi, rsi_ant, atr = indicadores_saida(velas, q)
+        if perdeu_tendencia(mf, ms, rsi, rsi_ant, atr, lucro, k):
+            return "PERDEU TENDENCIA"
     return None
 
 
-def decidir_saida(entrada, topo, preco, closes, p=None):
+def decidir_saida(entrada, topo, preco, closes, p=None, velas=None):
+    """velas (opcional, ~70 últimas, inclui a atual): necessárias para a saída 'perdeu tendência' (ATR)."""
     px, motivo, _ = nivel_stop(entrada, topo, p)
     if preco <= px:
         return motivo
-    a = analisar(closes)
+    a = analisar(closes, (p or PARAMS).get("rsi_p", 14))
     if a is None:
         return None
-    return saida_secundaria(entrada, preco, closes, a, p)
+    return saida_secundaria(entrada, preco, closes, a, p, velas)
 
 
 # ----------------------------------------------------------------------------
@@ -384,7 +418,7 @@ def backtest_par(candles, ativas, p=None):
             else:
                 # 2) atualiza topo e avalia no fechamento (stop/trailing atualizado + 2ª camada)
                 pos["topo"] = max(pos["topo"], h)
-                motivo = decidir_saida(pos["entrada"], pos["topo"], c, janela, p)
+                motivo = decidir_saida(pos["entrada"], pos["topo"], c, janela, p, candles[max(0, i - 69):i + 1])
                 saida = c
                 if not motivo:
                     continue
@@ -392,7 +426,7 @@ def backtest_par(candles, ativas, p=None):
                            "tipo": pos["tipo"]})
             pos = None
         else:
-            tipo = escolher_entrada(analisar(janela), ativas, p["vol_min"])
+            tipo = escolher_entrada(analisar(janela, p.get("rsi_p", 9)), ativas, p["vol_min"])
             if tipo:
                 pos = {"entrada": c, "topo": c, "tipo": tipo}
     return trades
@@ -515,8 +549,8 @@ def preparar_dia(c5):
     t = [x[4] for x in c5]
     v = [x[5] for x in c5]
     return {"o": o, "h": h, "l": l, "c": c, "t": t, "v": v,
-            "ema9": _ema(c, 9), "ema21": _ema(c, 21), "ema50": _ema(c, 50),
-            "rsi": serie_rsi(c), "atr": _atr(h, l, c),
+            "ema9": _ema(c, PERFIL_DIA["ma_f"]), "ema21": _ema(c, PERFIL_DIA["ma_s"]), "ema50": _ema(c, 50),
+            "rsi": serie_rsi(c, PERFIL_DIA["rsi_p"]), "atr": _atr(h, l, c, PERFIL_DIA["atr_p"]),
             "vavg": [None] * 20 + [sum(v[i - 20:i]) / 20 for i in range(20, n)],
             "vwap": _vwap_dia(c5), "ctx": _ctx15(c5)}
 
@@ -646,7 +680,8 @@ def backtest_dia(c5, ativas, p=None, t_ini=0, stats=None):
                 saida = min(px, o)
             else:
                 pos["topo"] = max(pos["topo"], h)
-                motivo = decidir_saida(pos["entrada"], pos["topo"], c, d["c"][max(0, i - 49):i + 1], pp)
+                motivo = decidir_saida(pos["entrada"], pos["topo"], c, d["c"][max(0, i - 49):i + 1], pp,
+                                       c5[max(0, i - 69):i + 1])
                 saida = c
                 if not motivo:
                     continue
@@ -657,7 +692,7 @@ def backtest_dia(c5, ativas, p=None, t_ini=0, stats=None):
             sin = sinais_dia(d, i, p)
             tipo = escolher_tipo_dia(sin, ativas)
             if tipo:
-                pp = params_atr(sin["info"]["atr_pct"], p) if prop else p
+                pp = params_atr(sin["info"]["atr_pct"], p) if prop else dict(p, **PERFIL_DIA)
                 stops.append(pp["stop_pct"])
                 ativas_l.append(pp["trail_ativa"])
                 pos = {"entrada": c, "topo": c, "tipo": tipo, "p": pp}
@@ -1071,7 +1106,7 @@ class Motor:
                     return
             with self.lock:
                 pos["topo"] = max(pos["topo"], preco)
-            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"))
+            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"), candles[-70:])
             if motivo:
                 self.fechar(sym, pos, preco, motivo, closes, modo, ex, livre)
             return
@@ -1124,7 +1159,8 @@ class Motor:
         est = self.est
         sym = regra["par"]
         pos_d = est["pos_sim"] if modo == "SIM" else est["pos_real"]
-        closes = [c[3] for c in buscar_klines(sym, "1m", 50)]
+        velas = buscar_klines(sym, "1m", 70)
+        closes = [c[3] for c in velas][-50:]
         if len(closes) < 30:
             return
         preco = closes[-1]
@@ -1149,13 +1185,13 @@ class Motor:
                     return
             with self.lock:
                 pos["topo"] = max(pos["topo"], preco)
-            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"))
+            motivo = decidir_saida(pos["entrada"], pos["topo"], preco, closes, pos.get("p"), velas)
             if motivo:
                 self.fechar(sym, pos, preco, motivo, closes, modo, ex, livre)
             return
 
         # entrada
-        a = analisar(closes)
+        a = analisar(closes, PARAMS["rsi_p"])
         tipo = escolher_entrada(a, regra.get("estrategias", ESTRATEGIAS))
         if not tipo:
             return
@@ -1214,7 +1250,7 @@ class Motor:
                 raise
         lucro = (preco_saida / pos["entrada"] - 1) * 100
         lucro_max = (pos["topo"] / pos["entrada"] - 1) * 100
-        a = analisar(closes) or {"rsi": 0, "ma9": 0, "ma21": 0}
+        a = analisar(closes, (pos.get("p") or {}).get("rsi_p", 14)) or {"rsi": 0, "ma9": 0, "ma21": 0}
         with self.lock:
             if modo == "SIM":
                 est["saldo"] += pos["qtd"] * preco_saida

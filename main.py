@@ -1360,7 +1360,7 @@ class BotApp(App):
                 return
             try:
                 closes = [c[3] for c in buscar_klines(sym, "1m", 50)]
-                a = analisar(closes)
+                a = analisar(closes, PARAMS["rsi_p"])
                 if a is None:
                     raise Exception("poucos candles")
             except Exception as e:
@@ -1374,7 +1374,7 @@ class BotApp(App):
             ent = escolher_entrada(a, ESTRATEGIAS)
             sinal = ("COMPRA (%s)" % ent) if ent and liberado else (
                 "Gatilho %s, mas a IA bloqueou" % ent if ent else "AGUARDAR")
-            msg = ("%s · 1m (entradas antigas)\nPreço: %s\nRSI14: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
+            msg = ("%s · 1m (entradas antigas)\nPreço: %s\nRSI9: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
                    "Tendência: %s · volatilidade %.2f%%\n"
                    "Pullback: %s · Continuidade: %s · Rompimento: %s\n"
                    "Prob. IA: %.2f (%d trades no histórico)\n\nSinal: %s\n\n"

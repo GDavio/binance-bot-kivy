@@ -35,7 +35,10 @@ TAXA_IDA_VOLTA = 0.2  # % de taxa por operação (0,1% por lado)
 PARAMS = {"vol_min": VOL_MIN, "trail_ativa": TRAIL_ATIVA, "trail_trava": TRAIL_TRAVA,
           "stop_pct": STOP_PCT, "stop_max": 0.8, "escala": 1.0,
           # Perfil 1m (entradas antigas): MA 9/21 simples, RSI 9, ATR 9
-          "ma_tipo": "sma", "ma_f": 9, "ma_s": 21, "rsi_p": 9, "atr_p": 9}
+          "ma_tipo": "sma", "ma_f": 9, "ma_s": 21, "rsi_p": 9, "atr_p": 9,
+          "vol_min_1m": 0.04,              # ATR9 mínimo (%) do perfil 1m (≈ o filtro antigo de 0,10% em 10 fechamentos)
+          "sec_rev": True, "sec_trend": True}   # liga/desliga REVERSAO FORTE e PERDEU TENDENCIA
+ATR_MIN_1M = PARAMS["vol_min_1m"]
 # Perfil 5m (entradas Dia): MA 9/21 exponenciais, RSI 14, ATR 14
 PERFIL_DIA = {"ma_tipo": "ema", "ma_f": 9, "ma_s": 21, "rsi_p": 14, "atr_p": 14}
 # Saída "perdeu tendência": cruzamento das médias para baixo + RSI <= 40 e caindo (antes < 43)
@@ -223,14 +226,15 @@ def serie_rsi(closes, p=14):
 # ----------------------------------------------------------------------------
 # ESTRATÉGIA: entradas
 # ----------------------------------------------------------------------------
-def analisar(closes, rsi_p=14):
+def analisar(closes, rsi_p=14, atr_pct=None):
     """Indicadores + os três gatilhos de entrada. Use as últimas ~50 closes."""
     if len(closes) < 30:
         return None
     preco, ant = closes[-1], closes[-2]
     rsi, rsi_ant = calcular_rsi(closes, rsi_p), calcular_rsi(closes[:-1], rsi_p)
     ma9, ma21 = media(closes, 9), media(closes, 21)
-    vol = (max(closes[-10:]) - min(closes[-10:])) / preco * 100
+    # volatilidade: ATR% do perfil (1m: ATR9); sem ATR cai na faixa dos últimos 10 fechamentos
+    vol = atr_pct if atr_pct is not None else (max(closes[-10:]) - min(closes[-10:])) / preco * 100
     dist = (ma9 - ma21) / ma21 * 100
     tend = ma9 > ma21
     forte = dist > 0.02
@@ -249,7 +253,7 @@ def analisar(closes, rsi_p=14):
 
 def escolher_entrada(a, ativas, vol_min=None):
     """Prioridade: pullback > continuidade > rompimento (só as estratégias ligadas)."""
-    vm = VOL_MIN if vol_min is None else vol_min
+    vm = ATR_MIN_1M if vol_min is None else vol_min
     if a is None or a["vol"] <= vm:
         return None
     for nome in ESTRATEGIAS:
@@ -336,6 +340,12 @@ def params_atr(atr_pct, base=None):
     return b
 
 
+def atr_pct_velas(velas, periodo):
+    """ATR (Wilder) em % do último fechamento. velas = (o, h, l, c, ...)."""
+    a = _atr([x[1] for x in velas], [x[2] for x in velas], [x[3] for x in velas], periodo)[-1]
+    return a / velas[-1][3] * 100 if a else 0.0
+
+
 def indicadores_saida(velas, q):
     """MA rápida/lenta, RSI e ATR com os períodos do perfil da posição. velas = (o, h, l, c, ...)."""
     c = [x[3] for x in velas]
@@ -364,10 +374,10 @@ def saida_secundaria(entrada, preco, closes, a, p=None, velas=None):
     q = p or PARAMS
     k = q.get("stop_pct", STOP_PCT) / STOP_PCT     # proporcional ao stop
     lucro = (preco / entrada - 1) * 100
-    if (a["rsi"] < 38 and a["rsi"] < a["rsi_ant"] and preco < a["ma9"] and preco < a["ant"]
-            and lucro < -0.25 * k):
+    if (q.get("sec_rev", True) and a["rsi"] < 38 and a["rsi"] < a["rsi_ant"] and preco < a["ma9"]
+            and preco < a["ant"] and lucro < -0.25 * k):
         return "REVERSAO FORTE"
-    if velas and len(velas) >= 30:
+    if q.get("sec_trend", True) and velas and len(velas) >= 30:
         mf, ms, rsi, rsi_ant, atr = indicadores_saida(velas, q)
         if perdeu_tendencia(mf, ms, rsi, rsi_ant, atr, lucro, k):
             return "PERDEU TENDENCIA"
@@ -403,10 +413,14 @@ def baixar_candles(sym, intervalo, dias):
     return out
 
 
-def backtest_par(candles, ativas, p=None):
-    """p = {"vol_min", "trail_ativa", "trail_trava"}; o que faltar usa o padrão (PARAMS)."""
+def backtest_par(candles, ativas, p=None, stats=None):
+    """Perfil 1m (entradas antigas). Volatilidade = ATR9 (mínimo p["vol_min_1m"]).
+    stats (opcional) recebe atr_medio e pct_filtro (% das velas livres que passam no filtro de ATR)."""
     p = dict(PARAMS, **(p or {}))
+    atr = _atr([x[1] for x in candles], [x[2] for x in candles], [x[3] for x in candles], p["atr_p"])
+    vmin = p.get("vol_min_1m", ATR_MIN_1M)
     trades, pos = [], None
+    n_av, soma_atr, n_ok = 0, 0.0, 0
     for i in range(30, len(candles)):
         o, h, l, c, t = candles[i][:5]
         janela = [x[3] for x in candles[max(0, i - 49):i + 1]]
@@ -425,10 +439,17 @@ def backtest_par(candles, ativas, p=None):
             trades.append({"lucro": (saida / pos["entrada"] - 1) * 100, "motivo": motivo,
                            "tipo": pos["tipo"]})
             pos = None
-        else:
-            tipo = escolher_entrada(analisar(janela, p.get("rsi_p", 9)), ativas, p["vol_min"])
+        elif atr[i] is not None:
+            ap = atr[i] / c * 100
+            n_av += 1
+            soma_atr += ap
+            n_ok += ap > vmin
+            tipo = escolher_entrada(analisar(janela, p["rsi_p"], ap), ativas, vmin)
             if tipo:
                 pos = {"entrada": c, "topo": c, "tipo": tipo}
+    if stats is not None:
+        stats["atr_medio"] = soma_atr / n_av if n_av else 0.0
+        stats["pct_filtro"] = n_ok / n_av * 100 if n_av else 0.0
     return trades
 
 
@@ -1191,7 +1212,7 @@ class Motor:
             return
 
         # entrada
-        a = analisar(closes, PARAMS["rsi_p"])
+        a = analisar(closes, PARAMS["rsi_p"], atr_pct_velas(velas, PARAMS["atr_p"]))
         tipo = escolher_entrada(a, regra.get("estrategias", ESTRATEGIAS))
         if not tipo:
             return

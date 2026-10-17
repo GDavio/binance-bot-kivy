@@ -145,7 +145,7 @@ def chip_row(opcoes, selecionado, ao_escolher, altura=44, tam=13):
     return row
 
 
-def toggle_row(opcoes, ativas, ao_mudar, altura=46, tam=13):
+def toggle_row(opcoes, ativas, ao_mudar, altura=46, tam=13, minimo=1):
     """Botões liga/desliga (pelo menos um fica sempre ligado). opcoes = [(chave, rótulo)]."""
     ativas = set(ativas)
     row = BoxLayout(size_hint_y=None, height=dp(altura), spacing=dp(8))
@@ -159,7 +159,7 @@ def toggle_row(opcoes, ativas, ao_mudar, altura=46, tam=13):
     def clicou(inst):
         k = inst._chave
         if k in ativas:
-            if len(ativas) == 1:
+            if len(ativas) <= minimo:
                 return
             ativas.discard(k)
         else:
@@ -329,9 +329,9 @@ class BotApp(App):
         self._thr_local = None
         self._bat_pedido = False
         self.bt = {"pares": "BTCUSDT", "estr": list(ESTRATEGIAS), "dias": "7d",
-                   "int": "15m", "valor": "12",
+                   "valor": "12", "rev": True, "tend": True,
                    "stop": "%.2f" % STOP_PCT, "stopmax": "%.2f" % PARAMS["stop_max"],
-                   "vol": "%.2f" % VOL_MIN, "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA,
+                   "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA,
                    "modelo": "dia"}
         self.filtro_exec = None
         self.exec_box = None
@@ -1359,8 +1359,9 @@ class BotApp(App):
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
                 return
             try:
-                closes = [c[3] for c in buscar_klines(sym, "1m", 50)]
-                a = analisar(closes, PARAMS["rsi_p"])
+                velas = buscar_klines(sym, "1m", 70)
+                closes = [c[3] for c in velas][-50:]
+                a = analisar(closes, PARAMS["rsi_p"], atr_pct_velas(velas, PARAMS["atr_p"]))
                 if a is None:
                     raise Exception("poucos candles")
             except Exception as e:
@@ -1375,7 +1376,7 @@ class BotApp(App):
             sinal = ("COMPRA (%s)" % ent) if ent and liberado else (
                 "Gatilho %s, mas a IA bloqueou" % ent if ent else "AGUARDAR")
             msg = ("%s · 1m (entradas antigas)\nPreço: %s\nRSI9: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
-                   "Tendência: %s · volatilidade %.2f%%\n"
+                   "Tendência: %s · ATR9 %.3f%%\n"
                    "Pullback: %s · Continuidade: %s · Rompimento: %s\n"
                    "Prob. IA: %.2f (%d trades no histórico)\n\nSinal: %s\n\n"
                    "Heurística do robô, não é recomendação."
@@ -1393,8 +1394,8 @@ class BotApp(App):
         c = Card(bg=CARD, radius=18, orientation="vertical", size_hint_y=None,
                  padding=dp(20), spacing=dp(12))
         c.add_widget(txt("Backtest Rápido", 24, TEXT, True, altura=34))
-        d = txt("Simula a estratégia escada (stop fixo + trailing em escada) nos últimos N dias "
-                "usando candles reais, com as regras e os pares que você escolher.", 15, MUTED)
+        d = txt("Simula o perfil do robô nos últimos N dias com candles reais. O perfil define o intervalo, "
+                "os indicadores e o ATR (a volatilidade é medida pelo ATR, sem valor manual).", 15, MUTED)
         d.size_hint_y = None
         d.height = dp(74)
         c.add_widget(d)
@@ -1407,43 +1408,60 @@ class BotApp(App):
         c.add_widget(chip_row(list(rot_bt.values()), rot_bt.get(self.bt["modelo"], "Perfil 5m"),
                               lambda r: self.bt.__setitem__("modelo", "dia" if "5m" in r else "antigo"),
                               altura=46, tam=14))
-        dp_ = txt("5m: entradas Dia + stop e escada proporcionais ao ATR do par (os valores abaixo são o piso). "
-                  "1m: entradas antigas + stop e escada fixos.", 13, MUTED)
+        dp_ = txt("5m: entradas Dia (EMA 9/21, RSI 14, ATR 14) + stop e escada proporcionais ao ATR. "
+                  "1m: entradas antigas (MA 9/21, RSI 9, ATR 9) + stop e escada fixos (máx. 30 dias).", 13, MUTED)
         dp_.size_hint_y = None
-        dp_.height = dp(54)
+        dp_.height = dp(70)
         c.add_widget(dp_)
         c.add_widget(txt("Regras de entrada", 15, MUTED, altura=22))
         c.add_widget(toggle_row([(k, ROTULO[k]) for k in ESTRATEGIAS], self.bt["estr"],
                                 lambda lst: self.bt.__setitem__("estr", lst), altura=46, tam=13))
         c.add_widget(txt("Período", 15, MUTED, altura=22))
-        c.add_widget(chip_row(["3d", "7d", "14d", "30d"], self.bt["dias"],
-                              lambda k: self.bt.__setitem__("dias", k), altura=48, tam=15))
-        c.add_widget(txt("Intervalo (só no Perfil 1m; o Perfil 5m usa 5m + 15m)", 15, MUTED, altura=40))
-        c.add_widget(chip_row(["1m", "5m", "15m", "1h", "4h"], self.bt["int"],
-                              lambda k: self.bt.__setitem__("int", k), altura=48, tam=15))
+        c.add_widget(chip_row(["3d", "7d", "14d", "30d", "60d", "90d"], self.bt["dias"],
+                              lambda k: self.bt.__setitem__("dias", k), altura=46, tam=13))
         c.add_widget(txt("Valor por ordem (USDT)", 15, MUTED, altura=22))
         bv = campo_numero(self.bt["valor"], 20)
         bv.bind(text=lambda w, v: self.bt.__setitem__("valor", v))
         c.add_widget(bv)
-        c.add_widget(txt("Parâmetros do teste (%)", 15, MUTED, altura=22))
-        lin = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
-        for chave, rot in (("vol", "Volat. mín."), ("ativa", "Trailing ativa"), ("trava", "Trailing trava")):
-            col = BoxLayout(orientation="vertical", spacing=dp(2))
-            col.add_widget(txt(rot, 12, MUTED, altura=18))
-            f = campo_numero(self.bt[chave], 18)
-            f.bind(text=lambda w, v, k=chave: self.bt.__setitem__(k, v))
-            col.add_widget(f)
-            lin.add_widget(col)
-        c.add_widget(lin)
-        lin2 = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
-        for chave, rot in (("stop", "Stop mín."), ("stopmax", "Stop máx. (só 5m)")):
-            col = BoxLayout(orientation="vertical", spacing=dp(2))
-            col.add_widget(txt(rot, 12, MUTED, altura=18))
-            f = campo_numero(self.bt[chave], 18)
-            f.bind(text=lambda w, v, k=chave: self.bt.__setitem__(k, v))
-            col.add_widget(f)
-            lin2.add_widget(col)
-        c.add_widget(lin2)
+
+        # ---- Avançado (fechado por padrão)
+        av = BoxLayout(orientation="vertical", spacing=dp(10))
+        av.add_widget(txt("Saídas secundárias (desligue para testar)", 15, MUTED, altura=22))
+        ativos_sec = [k for k, on in (("rev", self.bt["rev"]), ("tend", self.bt["tend"])) if on]
+
+        def mudou_sec(lst):
+            self.bt["rev"] = "rev" in lst
+            self.bt["tend"] = "tend" in lst
+
+        av.add_widget(toggle_row([("rev", "Reversão forte"), ("tend", "Perdeu tendência")], ativos_sec,
+                                 mudou_sec, altura=46, tam=13, minimo=0))
+        for pares_campos in ((("ativa", "Trailing ativa (%)"), ("trava", "Trailing trava (%)")),
+                             (("stop", "Stop mín. (%)"), ("stopmax", "Stop máx. (%, só 5m)"))):
+            lin = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
+            for chave, rot in pares_campos:
+                col = BoxLayout(orientation="vertical", spacing=dp(2))
+                col.add_widget(txt(rot, 12, MUTED, altura=18))
+                f = campo_numero(self.bt[chave], 18)
+                f.bind(text=lambda w, v, k=chave: self.bt.__setitem__(k, v))
+                col.add_widget(f)
+                lin.add_widget(col)
+            av.add_widget(lin)
+        auto_altura(av)
+        estado_av = {"aberto": False}
+        btn_av = RoundBtn(bg=CARD2, text="Avançado (mostrar)", font_size=sp(15),
+                          size_hint_y=None, height=dp(46), radius=14)
+
+        def alternar(*_):
+            if estado_av["aberto"]:
+                c.remove_widget(av)
+                btn_av.text = "Avançado (mostrar)"
+            else:
+                c.add_widget(av, index=1)          # logo acima do botão "Rodar backtest"
+                btn_av.text = "Avançado (ocultar)"
+            estado_av["aberto"] = not estado_av["aberto"]
+
+        btn_av.bind(on_release=alternar)
+        c.add_widget(btn_av)
         run = RoundBtn(bg=YELLOW, fg=DARK, text="Rodar backtest", font_size=sp(18),
                        size_hint_y=None, height=dp(58), radius=18)
         run.bind(on_release=lambda *_: self.executar_backtest())
@@ -1466,17 +1484,18 @@ class BotApp(App):
             except ValueError:
                 return padrao
 
-        valor = num("valor", 100.0)
-        p = {"vol_min": num("vol", VOL_MIN), "trail_ativa": num("ativa", TRAIL_ATIVA),
-             "trail_trava": num("trava", TRAIL_TRAVA),
-             "stop_pct": num("stop", STOP_PCT), "stop_max": num("stopmax", PARAMS["stop_max"])}
+        valor = num("valor", 12.0)
+        p = {"trail_ativa": num("ativa", TRAIL_ATIVA), "trail_trava": num("trava", TRAIL_TRAVA),
+             "stop_pct": num("stop", STOP_PCT), "stop_max": num("stopmax", PARAMS["stop_max"]),
+             "sec_rev": bool(self.bt.get("rev", True)), "sec_trend": bool(self.bt.get("tend", True))}
         if p["stop_max"] < p["stop_pct"]:
             return self.aviso("O stop máximo deve ser maior ou igual ao stop mínimo.")
         if p["trail_trava"] >= p["trail_ativa"]:
             return self.aviso("O trailing deve travar abaixo de onde ativa (ex.: ativa 0.45, trava 0.25).")
         dias = int(self.bt["dias"][:-1])
         modelo = self.bt.get("modelo", "dia")
-        inter = "5m" if modelo == "dia" else self.bt["int"]
+        if modelo != "dia" and dias > 30:
+            return self.aviso("No Perfil 1m o máximo é 30 dias (são muitos candles de 1 minuto).")
         ativas = list(self.bt["estr"])
         self.mostrar_card(self.bt_out, "Rodando backtest...")
 
@@ -1498,11 +1517,11 @@ class BotApp(App):
                             continue
                         trades = backtest_dia(candles, ativas, p, t_ini, st)
                     else:
-                        candles = baixar_candles(sym, inter, dias)
-                        if len(candles) < 40:
+                        candles = baixar_candles(sym, "1m", dias)
+                        if len(candles) < 100:
                             partes.append("%s: poucos candles (par novo ou inválido)." % sym)
                             continue
-                        trades = backtest_par(candles, ativas, p)
+                        trades = backtest_par(candles, ativas, p, st)
                 except Exception as e:
                     partes.append("%s: erro (%s)" % (sym, str(e)[:80]))
                     continue
@@ -1511,21 +1530,26 @@ class BotApp(App):
                     continue
                 n, soma, texto = resumo_trades(trades, valor, dias)
                 if modelo == "dia" and st.get("stop_medio"):
-                    texto += "\nATR 5m médio %.2f%% · stop médio %.2f%% · trailing ativa média %.2f%%" % (
+                    texto += "\nATR14 5m médio %.2f%% · stop médio %.2f%% · trailing ativa média %.2f%%" % (
                         st["atr_medio"], st["stop_medio"], st["ativa_media"])
+                elif modelo != "dia" and st:
+                    texto += "\nATR9 1m médio %.3f%% · velas com ATR acima do mínimo (%.2f%%): %.0f%%" % (
+                        st["atr_medio"], ATR_MIN_1M, st["pct_filtro"])
                 tot_n += n
                 tot_soma += soma
                 partes.append("%s · %s" % (sym, texto))
+            sec = "Reversão forte %s · Perdeu tendência %s" % (
+                "ON" if p["sec_rev"] else "OFF", "ON" if p["sec_trend"] else "OFF")
             if modelo == "dia":
-                cab = ("Perfil 5m (entradas Dia + stop/escada por ATR) · %s · %d dias\nATR mín. %.2f%% · stop %.2f–%.2f%% · "
-                       "trailing ativa ≥ %.2f%% / trava ≥ %.2f%% · ordem %.0f USDT\n\n" % (
-                           " ".join(ROTULO[e] for e in ativas), dias, p["vol_min"], p["stop_pct"], p["stop_max"],
-                           p["trail_ativa"], p["trail_trava"], valor))
+                cab = ("Perfil 5m (EMA 9/21, RSI 14, ATR 14; stop/escada por ATR) · %s · %d dias\n"
+                       "ATR14 mín. %.2f%% · stop %.2f–%.2f%% · trailing ativa ≥ %.2f%% / trava ≥ %.2f%%\n%s · ordem %.0f USDT\n\n" % (
+                           " ".join(ROTULO[e] for e in ativas), dias, VOL_MIN, p["stop_pct"], p["stop_max"],
+                           p["trail_ativa"], p["trail_trava"], sec, valor))
             else:
-                cab = ("Perfil 1m (entradas antigas, stop/escada fixos) · %s · %d dias · %s\nVolat. mín. %.2f%% · stop %.2f%% · "
-                       "trailing ativa %.2f%% / trava %.2f%% · ordem %.0f USDT\n\n" % (
-                           " ".join(ROTULO[e] for e in ativas), dias, inter, p["vol_min"], p["stop_pct"],
-                           p["trail_ativa"], p["trail_trava"], valor))
+                cab = ("Perfil 1m (MA 9/21, RSI 9, ATR 9; stop/escada fixos) · %s · %d dias\n"
+                       "ATR9 mín. %.2f%% · stop %.2f%% · trailing ativa %.2f%% / trava %.2f%%\n%s · ordem %.0f USDT\n\n" % (
+                           " ".join(ROTULO[e] for e in ativas), dias, ATR_MIN_1M, p["stop_pct"],
+                           p["trail_ativa"], p["trail_trava"], sec, valor))
             if len(pares) > 1 and tot_n:
                 liq = tot_soma - TAXA_IDA_VOLTA * tot_n
                 partes.append("TOTAL: %d op · soma %+.2f%% (≈ %+.2f USDT) · c/ taxa %+.2f%% (≈ %+.2f USDT)" % (

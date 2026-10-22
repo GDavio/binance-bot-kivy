@@ -22,12 +22,11 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.utils import platform
 
-# Tudo que não é tela (estratégia, Binance, backtest, Motor do robô) está no core.py.
-from core import *  # noqa: F401,F403
+import importlib
+import core
+importlib.reload(core)
+from core import *
 
-# ----------------------------------------------------------------------------
-# Paleta
-# ----------------------------------------------------------------------------
 BG = (0.071, 0.075, 0.090, 1)
 NAV = (0.067, 0.071, 0.086, 1)
 CARD = (0.105, 0.115, 0.150, 1)
@@ -44,9 +43,7 @@ CLEAR = (0, 0, 0, 0)
 PARES = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TF_LISTA = ["1m", "5m", "15m", "1h", "4h", "1D"]
 TF_API = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1D": "1d"}
-# ----------------------------------------------------------------------------
-# Widgets base
-# ----------------------------------------------------------------------------
+
 def txt(texto, tam=14, cor=TEXT, bold=False, halign="left", altura=None, **kw):
     lb = Label(text=texto, font_size=sp(tam), color=cor, bold=bold,
                halign=halign, valign="middle", **kw)
@@ -56,14 +53,12 @@ def txt(texto, tam=14, cor=TEXT, bold=False, halign="left", altura=None, **kw):
         lb.height = dp(altura)
     return lb
 
-
 def txt_auto(texto="", tam=15, cor=TEXT):
     lb = Label(text=texto, font_size=sp(tam), color=cor, halign="left", valign="top",
                size_hint_y=None)
     lb.bind(width=lambda w, v: setattr(w, "text_size", (v, None)))
     lb.bind(texture_size=lambda w, s: setattr(w, "height", s[1]))
     return lb
-
 
 class Card(BoxLayout):
     def __init__(self, bg=CARD, radius=16, **kw):
@@ -77,7 +72,6 @@ class Card(BoxLayout):
         self._r.pos = self.pos
         self._r.size = self.size
 
-
 class ClickCard(Card):
     def __init__(self, cb=None, **kw):
         super().__init__(**kw)
@@ -88,7 +82,6 @@ class ClickCard(Card):
                 and abs(touch.y - touch.oy) < dp(12) and abs(touch.x - touch.ox) < dp(12)):
             self.cb(self)
         return super().on_touch_up(touch)
-
 
 class RoundBtn(Button):
     def __init__(self, bg=CARD2, fg=TEXT, radius=22, **kw):
@@ -110,19 +103,16 @@ class RoundBtn(Button):
         if fg is not None:
             self.color = fg
 
-
 def auto_altura(w):
     w.size_hint_y = None
     w.bind(minimum_height=w.setter("height"))
     return w
-
 
 def rolavel(box):
     auto_altura(box)
     sv = ScrollView(do_scroll_x=False, bar_width=0)
     sv.add_widget(box)
     return sv
-
 
 def chip_row(opcoes, selecionado, ao_escolher, altura=44, tam=13):
     row = BoxLayout(size_hint_y=None, height=dp(altura), spacing=dp(8))
@@ -144,9 +134,7 @@ def chip_row(opcoes, selecionado, ao_escolher, altura=44, tam=13):
     pintar(selecionado)
     return row
 
-
 def toggle_row(opcoes, ativas, ao_mudar, altura=46, tam=13, minimo=1):
-    """Botões liga/desliga (pelo menos um fica sempre ligado). opcoes = [(chave, rótulo)]."""
     ativas = set(ativas)
     row = BoxLayout(size_hint_y=None, height=dp(altura), spacing=dp(8))
     botoes = {}
@@ -176,13 +164,11 @@ def toggle_row(opcoes, ativas, ao_mudar, altura=46, tam=13, minimo=1):
     pintar()
     return row
 
-
 def tag(texto, vermelha=False):
     w = dp(26 + 7.4 * len(texto))
     c = Card(bg=RED if vermelha else CARD2, radius=15, size_hint=(None, None), size=(w, dp(30)))
     c.add_widget(txt(texto, 12, TEXT, True, "center"))
     return c
-
 
 def campo_numero(valor, tam=22):
     return TextInput(text=str(valor), input_filter="float", multiline=False,
@@ -191,7 +177,6 @@ def campo_numero(valor, tam=22):
                      background_normal="", background_active="", background_color=CARD2,
                      foreground_color=TEXT, cursor_color=YELLOW)
 
-
 def campo_texto(valor="", hint="", tam=18, senha=False):
     return TextInput(text=valor, hint_text=hint, multiline=False, write_tab=False, password=senha,
                      font_size=sp(tam), size_hint_y=None, height=dp(52),
@@ -199,10 +184,6 @@ def campo_texto(valor="", hint="", tam=18, senha=False):
                      background_normal="", background_active="", background_color=CARD2,
                      foreground_color=TEXT, hint_text_color=MUTED, cursor_color=YELLOW)
 
-
-# ----------------------------------------------------------------------------
-# Gráfico de candles + MA9 / MA21 + RSI14
-# ----------------------------------------------------------------------------
 class CandleChart(Widget):
     N = 70
 
@@ -294,14 +275,9 @@ class CandleChart(Widget):
                 Line(points=pts, width=1.3)
             self._t("RSI14", xa + dp(4), ry(100) + dp(10), YELLOW, 12)
 
-
-# ----------------------------------------------------------------------------
-# App
-# ----------------------------------------------------------------------------
 class BotApp(App):
     title = "Bot Binance"
 
-    # ---------- ciclo de vida ----------
     def build(self):
         Window.clearcolor = BG
         self.pasta = pasta_dados()
@@ -332,7 +308,7 @@ class BotApp(App):
                    "valor": "12", "rev": True, "tend": True,
                    "stop": "%.2f" % STOP_PCT, "stopmax": "%.2f" % PARAMS["stop_max"],
                    "ativa": "%.2f" % TRAIL_ATIVA, "trava": "%.2f" % TRAIL_TRAVA,
-                   "modelo": "dia"}
+                   "modelo": "5m", "funil": False}
         self.filtro_exec = None
         self.exec_box = None
         self.btn_f = {}
@@ -345,7 +321,7 @@ class BotApp(App):
         self.abrir_aba("markets")
         self.pedir_permissoes()
         if self.estado["robo_ativo"]:
-            self.garantir_motor()      # app reaberto com o robô ligado: garante o serviço
+            self.garantir_motor()
         Clock.schedule_interval(self.recarregar, 1)
         return root
 
@@ -357,7 +333,6 @@ class BotApp(App):
         return True
 
     def carregar(self):
-        """Config (modo, chaves, regras, robô on/off) é da tela; o resto vem do Motor."""
         d = dict(estado_servico_padrao(), **config_padrao())
         antigo = ler_json(self.arq_estado, {})
         cfg = ler_json(self.arq_config, None)
@@ -371,10 +346,12 @@ class BotApp(App):
             if k in antigo:
                 d[k] = antigo[k]
         if migrando and d["modo"] == "REAL":
-            d["robo_ativo"] = False          # nunca retoma ordens reais por migração
+            d["robo_ativo"] = False
         d["cfg"] = dict(config_padrao()["cfg"], **d.get("cfg", {}))
         for r in d["regras"]:
             r.setdefault("estrategias", list(ESTRATEGIAS))
+        if d.get("modelo") not in PERFIS:
+            d["modelo"] = "5m"
         try:
             gravar_json(self.arq_config, {k: d[k] for k in CONFIG_KEYS})
         except Exception as e:
@@ -384,7 +361,9 @@ class BotApp(App):
     def salvar(self):
         try:
             with self.lock:
-                gravar_json(self.arq_config, {k: self.estado[k] for k in CONFIG_KEYS})
+                ok = gravar_json(self.arq_config, {k: self.estado[k] for k in CONFIG_KEYS})
+                if not ok:
+                    self.aviso("Falha ao salvar config (armazenamento)")
         except Exception as e:
             print("Erro ao salvar config:", e)
 
@@ -401,7 +380,6 @@ class BotApp(App):
         modo = modo or self.estado["modo"]
         return self.estado["ia"] if modo == "REAL" else self.estado["ia_sim"]
 
-    # ---------- barra superior ----------
     def montar_barra(self):
         self.barra = Card(bg=CARD, radius=0, size_hint_y=None, height=dp(72),
                           padding=[dp(16), dp(8)], spacing=dp(8))
@@ -409,7 +387,7 @@ class BotApp(App):
         self.dot = Card(bg=GREEN, radius=6, size_hint=(None, None), size=(dp(12), dp(12)))
         dot_box.add_widget(self.dot)
         info = BoxLayout(orientation="vertical", padding=[0, dp(10)])
-        self.lbl_modo = txt("SIMULAÇÃO", 17, TEXT, True)
+        self.lbl_modo = txt("SIMULACAO", 17, TEXT, True)
         self.lbl_modo_sub = txt("", 14, MUTED)
         info.add_widget(self.lbl_modo)
         info.add_widget(self.lbl_modo_sub)
@@ -426,18 +404,18 @@ class BotApp(App):
     def atualizar_barra(self):
         est = self.estado
         if est["modo"] == "SIM":
-            self.lbl_modo.text = "SIMULAÇÃO"
-            self.lbl_modo_sub.text = "$%.2f USDT fictício" % est["saldo"]
+            self.lbl_modo.text = "SIMULACAO"
+            self.lbl_modo_sub.text = "$%.2f USDT ficticio" % est["saldo"]
             self.dot._c.rgba = GREEN
             self.btn_modo.text = "Ir p/ Real"
             self.btn_modo.estilo(RED, TEXT)
         else:
             rede = "Testnet" if est["cfg"]["testnet"] else "Conta real"
             self.lbl_modo.text = "REAL"
-            self.lbl_modo_sub.text = ("$%.2f USDT · %s" % (self.saldo_real, rede)
+            self.lbl_modo_sub.text = ("$%.2f USDT . %s" % (self.saldo_real, rede)
                                       if self.saldo_real is not None else rede)
             self.dot._c.rgba = RED
-            self.btn_modo.text = "Ir p/ Simulação"
+            self.btn_modo.text = "Ir p/ Simulacao"
             self.btn_modo.estilo(CARD2, TEXT)
         self.atualizar_saldo_label()
 
@@ -482,8 +460,8 @@ class BotApp(App):
         box = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(12))
         box.add_widget(txt("!", 38, RED, True, "center", altura=48))
         box.add_widget(txt("Ativar Modo Real?", 22, TEXT, True, "center", altura=36))
-        box.add_widget(txt("Ordens em modo real usarão as chaves da Binance configuradas em "
-                           "Ajustes. Por padrão, o app opera na Testnet. Confirme para continuar.",
+        box.add_widget(txt("Ordens em modo real usarao as chaves da Binance configuradas em "
+                           "Ajustes. Por padrao, o app opera na Testnet. Confirme para continuar.",
                            14, MUTED, False, "center"))
         linha = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(12))
         pop = Popup(title="", separator_height=0, content=box, size_hint=(0.92, None),
@@ -514,7 +492,7 @@ class BotApp(App):
     def ajustes(self):
         c = self.estado["cfg"]
         box = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
-        box.add_widget(txt("Ajustes · Binance", 20, TEXT, True, altura=32))
+        box.add_widget(txt("Ajustes . Binance", 20, TEXT, True, altura=32))
         box.add_widget(txt("API Key", 13, MUTED, altura=18))
         k = campo_texto(c["key"], "API Key", 15, senha=True)
         box.add_widget(k)
@@ -548,11 +526,10 @@ class BotApp(App):
         box.add_widget(botoes)
         pop.open()
 
-    # ---------- navegação ----------
     def montar_nav(self):
         nav = Card(bg=NAV, radius=0, size_hint_y=None, height=dp(64), padding=dp(4))
         self.nav_btns = {}
-        for chave, rotulo in (("markets", "MARKETS"), ("trade", "TRADE"), ("bot", "BOT · IA")):
+        for chave, rotulo in (("markets", "MARKETS"), ("trade", "TRADE"), ("bot", "BOT . IA")):
             b = RoundBtn(bg=CLEAR, fg=MUTED, text=rotulo, font_size=sp(13), radius=0)
             b.bind(on_release=lambda inst, k=chave: self.abrir_aba(k))
             self.nav_btns[chave] = b
@@ -578,7 +555,6 @@ class BotApp(App):
         else:
             self.tela_bot()
 
-    # ---------- MARKETS ----------
     def tela_markets(self):
         box = BoxLayout(orientation="vertical", padding=[dp(14), dp(10)], spacing=dp(10))
         topo = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(8))
@@ -588,7 +564,7 @@ class BotApp(App):
         aj.bind(on_release=lambda *_: self.ajustes())
         topo.add_widget(aj)
         box.add_widget(topo)
-        box.add_widget(txt("Preços em tempo real · Binance", 14, MUTED, altura=22))
+        box.add_widget(txt("Precos em tempo real . Binance", 14, MUTED, altura=22))
 
         busca = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
         self.inp_busca = campo_texto("", "Digite qualquer par (ex.: PEPEUSDT)", 16)
@@ -607,10 +583,10 @@ class BotApp(App):
                              size_hint_y=None, height=dp(84), padding=dp(16))
             esq = BoxLayout(orientation="vertical")
             esq.add_widget(txt(par_fmt(p), 18, TEXT, True))
-            lv = txt("Vol 24h: —", 13, MUTED)
+            lv = txt("Vol 24h: -", 13, MUTED)
             esq.add_widget(lv)
             dir_ = BoxLayout(orientation="vertical")
-            lp = txt("—", 18, TEXT, True, "right")
+            lp = txt("-", 18, TEXT, True, "right")
             dir_.add_widget(lp)
             ancora = AnchorLayout(anchor_x="right", anchor_y="center")
             pill = Card(bg=CARD2, radius=10, size_hint=(None, None), size=(dp(90), dp(28)))
@@ -662,7 +638,6 @@ class BotApp(App):
         self.preco_atual = None
         self.abrir_aba("trade")
 
-    # ---------- TRADE ----------
     def tela_trade(self):
         box = BoxLayout(orientation="vertical", padding=[dp(14), dp(10)], spacing=dp(12))
         linha = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
@@ -679,7 +654,7 @@ class BotApp(App):
         self.lbl_par = txt(par_fmt(self.par), 22, TEXT, True)
         info.add_widget(self.lbl_par)
         dir_ = BoxLayout(orientation="vertical")
-        self.lbl_preco = txt("—", 24, TEXT, True, "right")
+        self.lbl_preco = txt("-", 24, TEXT, True, "right")
         self.lbl_var = txt("", 14, GREEN, True, "right")
         dir_.add_widget(self.lbl_preco)
         dir_.add_widget(self.lbl_var)
@@ -694,7 +669,7 @@ class BotApp(App):
         box.add_widget(cg)
 
         ordem = Card(bg=CARD, radius=20, orientation="vertical", padding=dp(20), spacing=dp(12))
-        ordem.add_widget(txt("Nova Ordem · Market", 22, TEXT, True, altura=32))
+        ordem.add_widget(txt("Nova Ordem . Market", 22, TEXT, True, altura=32))
         ordem.add_widget(txt("Valor (USDT)", 15, MUTED, altura=22))
         self.inp_valor = campo_numero(self.valor_ordem)
         self.inp_valor.bind(text=lambda w, v: setattr(self, "valor_ordem", v))
@@ -715,7 +690,7 @@ class BotApp(App):
         ordem.add_widget(lin)
         self.lbl_posinfo = txt("", 13, MUTED, False, "center", altura=22)
         ordem.add_widget(self.lbl_posinfo)
-        be = RoundBtn(bg=RED, text="ENCERRAR POSIÇÃO", font_size=sp(16), size_hint_y=None,
+        be = RoundBtn(bg=RED, text="ENCERRAR POSICAO", font_size=sp(16), size_hint_y=None,
                       height=dp(52), radius=16)
         be.bind(on_release=lambda *_: self.encerrar([self.par]))
         ordem.add_widget(be)
@@ -735,7 +710,7 @@ class BotApp(App):
         if self.estado["modo"] == "SIM":
             self.lbl_saldo.text = "Saldo virtual: $%.2f USDT" % self.estado["saldo"]
         else:
-            self.lbl_saldo.text = "Modo real · ordens a mercado na Binance"
+            self.lbl_saldo.text = "Modo real . ordens a mercado na Binance"
 
     def trocou_par(self, texto):
         sym = normalizar_par(texto)
@@ -745,7 +720,7 @@ class BotApp(App):
         self.preco_atual = None
         self.inp_par.text = par_fmt(sym)
         self.lbl_par.text = par_fmt(sym)
-        self.lbl_preco.text = "—"
+        self.lbl_preco.text = "-"
         self.lbl_var.text = ""
         self.carregar_trade()
 
@@ -754,7 +729,6 @@ class BotApp(App):
         self.carregar_trade()
 
     def carregar_trade(self):
-        """Carga completa (troca de par/intervalo)."""
         self.candles_trade = []
         self._gen = getattr(self, "_gen", 0) + 1
         self._busy = False
@@ -780,7 +754,7 @@ class BotApp(App):
                 def erro(dt):
                     self._busy = False
                     if gen == self._gen and self.aba == "trade" and not self.candles_trade:
-                        self.lbl_var.text = "par inválido ou sem conexão"
+                        self.lbl_var.text = "par invalido ou sem conexao"
                         self.lbl_var.color = RED
 
                 Clock.schedule_once(erro)
@@ -831,12 +805,12 @@ class BotApp(App):
             if self.preco_atual:
                 lucro = (self.preco_atual / pos["entrada"] - 1) * 100
                 cor = GREEN if lucro >= 0 else RED
-                partes.append("Robô: entrada %s · %+.2f%%" % (fmt_preco(pos["entrada"]), lucro))
+                partes.append("Robo: entrada %s . %+.2f%%" % (fmt_preco(pos["entrada"]), lucro))
             else:
-                partes.append("Robô: entrada %s" % fmt_preco(pos["entrada"]))
+                partes.append("Robo: entrada %s" % fmt_preco(pos["entrada"]))
         if man > 1e-12:
             partes.append("Manual: %.6g" % man)
-        lb.text = "  |  ".join(partes) if partes else "Sem posição aberta neste par"
+        lb.text = "  |  ".join(partes) if partes else "Sem posicao aberta neste par"
         lb.color = cor
 
     def enviar_ordem(self, lado):
@@ -845,14 +819,13 @@ class BotApp(App):
         except ValueError:
             valor = 0
         if valor <= 0 or not self.preco_atual:
-            return self.aviso("Informe um valor válido e aguarde o preço carregar.")
+            return self.aviso("Informe um valor valido e aguarde o preco carregar.")
         if self.estado["modo"] == "REAL" and not self.cliente():
             return self.aviso("Configure as chaves da Binance em Ajustes.")
         self.enviar_cmd({"tipo": "ordem", "lado": lado, "sym": self.par,
                          "valor": valor, "preco": self.preco_atual})
 
     def enviar_cmd(self, cmd):
-        """A tela não mexe no saldo/posições: pede ao Motor (serviço) e mostra a resposta."""
         cid = "%d_%04d" % (int(time.time() * 1000), random.randint(0, 9999))
         cmd["id"] = cid
         self.garantir_motor()
@@ -862,12 +835,11 @@ class BotApp(App):
             return self.aviso("Falha ao enviar o comando: %s" % e)
         self._pend.add(cid)
 
-    # ---------- BOT · IA ----------
     def tela_bot(self):
         box = BoxLayout(orientation="vertical", padding=[dp(14), dp(10)], spacing=dp(12))
         sw = Card(bg=CARD, radius=18, size_hint_y=None, height=dp(58), padding=dp(5), spacing=dp(4))
         self.sub_btns = {}
-        for chave, rotulo in (("robo", "Robô"), ("ia", "Assistente IA"), ("backtest", "Backtest")):
+        for chave, rotulo in (("robo", "Robo"), ("ia", "Assistente IA"), ("backtest", "Backtest")):
             b = RoundBtn(bg=CLEAR, fg=TEXT, text=rotulo, font_size=sp(15), radius=14)
             b.bind(on_release=lambda inst, k=chave: self.mostrar_sub(k))
             self.sub_btns[chave] = b
@@ -895,14 +867,13 @@ class BotApp(App):
         else:
             self.sub_area.add_widget(self.sub_backtest())
 
-    # --- Robô ---
     def sub_robo(self):
         est = self.estado
         box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
 
         c1 = Card(bg=CARD, radius=18, size_hint_y=None, height=dp(86), padding=dp(18))
         t = BoxLayout(orientation="vertical")
-        t.add_widget(txt("Robô 24/7", 22, TEXT, True))
+        t.add_widget(txt("Robo 24/7", 22, TEXT, True))
         self.lbl_robo_sub = txt("", 14, MUTED)
         t.add_widget(self.lbl_robo_sub)
         c1.add_widget(t)
@@ -912,14 +883,14 @@ class BotApp(App):
         c1.add_widget(self.sw_robo)
         box.add_widget(c1)
         self.atualizar_sub_robo()
-        box.add_widget(txt("Perfil do robô", 15, MUTED, altura=22))
-        rot_mod = {"dia": "Perfil 5m", "antigo": "Perfil 1m"}
-        box.add_widget(chip_row(list(rot_mod.values()), rot_mod.get(est.get("modelo", "dia"), "Perfil 5m"),
-                                lambda r: self.trocar_modelo("dia" if "5m" in r else "antigo"),
+        box.add_widget(txt("Perfil do robo", 15, MUTED, altura=22))
+        rot_mod = {"5m": "Perfil 5m", "1m": "Perfil 1m"}
+        box.add_widget(chip_row(list(rot_mod.values()), rot_mod.get(est.get("modelo", "5m"), "Perfil 5m"),
+                                lambda r: self.trocar_modelo("5m" if "5m" in r else "1m"),
                                 altura=44, tam=14))
-        info_p = txt("5m: entradas Dia · stop %.1f–%.1f%% e escada proporcionais ao ATR do par (fixados na entrada). "
-                     "1m: entradas antigas · stop %.1f%% · escada %.2f/%.2f. Posição aberta mantém o perfil com que entrou."
-                     % (PARAMS["stop_pct"], PARAMS["stop_max"], STOP_PCT, TRAIL_ATIVA, TRAIL_TRAVA), 13, MUTED)
+        info_p = txt("5m: gatilho 5m, semaforo 15m, EMA 9/21, RSI 14, ATR 14. "
+                     "1m: gatilho 1m, semaforo 5m, EMA 9/21, RSI 9, ATR 9. "
+                     "Mesmas 3 estrategias; stop/escada proporcionais ao ATR do perfil.", 13, MUTED)
         info_p.size_hint_y = None
         info_p.height = dp(70)
         box.add_widget(info_p)
@@ -938,7 +909,7 @@ class BotApp(App):
             linha = BoxLayout(size_hint_y=None, height=dp(52))
             tt = BoxLayout(orientation="vertical")
             tt.add_widget(txt("Trailing Escada", 20, TEXT, True))
-            tt.add_widget(txt("%s · $%s USDT/ordem" % (r["par"], r["valor"]), 15, MUTED))
+            tt.add_widget(txt("%s . $%s USDT/ordem" % (r["par"], r["valor"]), 15, MUTED))
             linha.add_widget(tt)
             rm = RoundBtn(bg=CLEAR, fg=RED, text="X", font_size=sp(20),
                           size_hint=(None, None), size=(dp(44), dp(44)))
@@ -951,12 +922,10 @@ class BotApp(App):
             l1.add_widget(Widget())
             card.add_widget(l1)
             l2 = BoxLayout(size_hint_y=None, height=dp(30), spacing=dp(8))
-            if est.get("modelo", "dia") == "dia":
-                l2.add_widget(tag("Stop %.1f–%.1f%% (ATR)" % (PARAMS["stop_pct"], PARAMS["stop_max"]), True))
-                l2.add_widget(tag("Escada ATR"))
-            else:
-                l2.add_widget(tag("Stop -%s%%" % STOP_PCT, True))
-                l2.add_widget(tag("Trailing escada"))
+            perfil = PERFIS.get(est.get("modelo", "5m"), PERFIL_5M)
+            l2.add_widget(tag("Stop %.1f-%.1f%% (ATR)" % (PARAMS["stop_pct"], PARAMS["stop_max"]), True))
+            l2.add_widget(tag("Escada ATR"))
+            l2.add_widget(tag("Perfil " + perfil["nome"]))
             l2.add_widget(Widget())
             card.add_widget(l2)
             box.add_widget(card)
@@ -968,7 +937,7 @@ class BotApp(App):
         self.lbl_pnl = {}
         if abertas:
             cab = BoxLayout(size_hint_y=None, height=dp(44))
-            cab.add_widget(txt("Posições abertas (%d)" % len(abertas), 22, TEXT, True))
+            cab.add_widget(txt("Posicoes abertas (%d)" % len(abertas), 22, TEXT, True))
             if len(abertas) > 1:
                 bt = RoundBtn(bg=RED, text="Encerrar todas", font_size=sp(13), size_hint=(None, None),
                               size=(dp(140), dp(40)), radius=14)
@@ -981,10 +950,10 @@ class BotApp(App):
                          padding=[dp(18), dp(10)], spacing=dp(8))
                 tt = BoxLayout(orientation="vertical")
                 tt.add_widget(txt(par_fmt(s), 18, TEXT, True))
-                tt.add_widget(txt(("entrada %s · %s" % (fmt_preco(p["entrada"]), p["tipo"])) if p
-                                  else "manual · qtd %.6g" % man[s], 13, MUTED))
+                tt.add_widget(txt(("entrada %s . %s" % (fmt_preco(p["entrada"]), p["tipo"])) if p
+                                  else "manual . qtd %.6g" % man[s], 13, MUTED))
                 c.add_widget(tt)
-                lp = txt("—", 17, MUTED, True, "right", size_hint_x=None, width=dp(80))
+                lp = txt("-", 17, MUTED, True, "right", size_hint_x=None, width=dp(80))
                 c.add_widget(lp)
                 if p:
                     self.lbl_pnl[s] = (lp, p["entrada"])
@@ -995,7 +964,7 @@ class BotApp(App):
                 c.add_widget(b)
                 box.add_widget(c)
 
-        box.add_widget(txt("Últimas execuções", 22, TEXT, True, altura=40))
+        box.add_widget(txt("Ultimas execucoes", 22, TEXT, True, altura=40))
         exs = est["execucoes"]
         nb = len([e for e in exs if e["t"].startswith("BUY")])
         ns = len([e for e in exs if e["t"].startswith("SELL")])
@@ -1018,7 +987,6 @@ class BotApp(App):
         return rolavel(box)
 
     def filtrar_exec(self, lado):
-        """Toca em Buy ou Sell para filtrar; toca de novo para voltar a mostrar tudo."""
         self.filtro_exec = None if self.filtro_exec == lado else lado
         self.montar_execucoes()
 
@@ -1032,7 +1000,7 @@ class BotApp(App):
         exs = [e for e in self.estado["execucoes"]
                if not self.filtro_exec or e["t"].startswith(self.filtro_exec)]
         if not exs:
-            self.exec_box.add_widget(txt("Nenhuma execução%s." % (
+            self.exec_box.add_widget(txt("Nenhuma execucao%s." % (
                 " deste tipo" if self.filtro_exec else " ainda"), 15, MUTED, altura=30))
         for e in exs[:30]:
             c = Card(bg=CARD, radius=16, size_hint_y=None, height=dp(70), padding=[dp(18), dp(10)])
@@ -1076,10 +1044,9 @@ class BotApp(App):
         threading.Thread(target=job, daemon=True).start()
 
     def encerrar(self, simbolos):
-        """Pede ao Motor para vender a mercado a posição (robô e/ou manual) dos pares."""
         simbolos = list(simbolos)
         if not simbolos:
-            return self.aviso("Nenhuma posição aberta.")
+            return self.aviso("Nenhuma posicao aberta.")
         if self.estado["modo"] == "REAL" and not self.cliente():
             return self.aviso("Configure as chaves da Binance em Ajustes.")
         self.enviar_cmd({"tipo": "encerrar", "simbolos": simbolos})
@@ -1094,14 +1061,14 @@ class BotApp(App):
         elif est["robo_ativo"]:
             idade = agora - est.get("hb", 0)
             if idade > 25 or not est.get("origem"):
-                t = "Sem sinal do motor há %ds (iniciando ou parado)" % int(idade) if est.get("hb") else \
+                t = "Sem sinal do motor ha %ds (iniciando ou parado)" % int(idade) if est.get("hb") else \
                     "Iniciando o motor..."
             else:
-                onde = "Serviço" if est["origem"] == "servico" else "Motor local (sem serviço)"
+                onde = "Servico" if est["origem"] == "servico" else "Motor local (sem servico)"
                 desde = datetime.fromtimestamp(est["inicio"]).strftime("%d/%m %H:%M")
-                ciclo = ("ciclo há %ds" % int(agora - est["ciclo_ts"])) if est.get("ciclo_ts") else "aguardando ciclo"
-                t = "%s ativo desde %s · %s · %s" % (
-                    onde, desde, ciclo, "simulação" if est["modo"] == "SIM" else "REAL")
+                ciclo = ("ciclo ha %ds" % int(agora - est["ciclo_ts"])) if est.get("ciclo_ts") else "aguardando ciclo"
+                t = "%s ativo desde %s . %s . %s" % (
+                    onde, desde, ciclo, "simulacao" if est["modo"] == "SIM" else "REAL")
         else:
             t = "Desligado"
         self.lbl_robo_sub.text = t
@@ -1109,14 +1076,14 @@ class BotApp(App):
     def nova_regra(self):
         escolha = list(ESTRATEGIAS)
         box = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
-        box.add_widget(txt("Nova regra · Trailing Escada", 19, TEXT, True, altura=32))
+        box.add_widget(txt("Nova regra . Trailing Escada", 19, TEXT, True, altura=32))
         box.add_widget(txt("Par (qualquer um da Binance)", 13, MUTED, altura=18))
         inp = campo_texto("", "ex.: BTCUSDT, PEPEUSDT, ETHBTC", 18)
         box.add_widget(inp)
         box.add_widget(txt("Valor por ordem", 13, MUTED, altura=18))
         val = campo_numero("12", 20)
         box.add_widget(val)
-        box.add_widget(txt("Estratégias de entrada", 13, MUTED, altura=18))
+        box.add_widget(txt("Estrategias de entrada", 13, MUTED, altura=18))
         box.add_widget(toggle_row([(k, ROTULO[k]) for k in ESTRATEGIAS], escolha,
                                   lambda lst: escolha.__setitem__(slice(None), lst), altura=44, tam=12))
         msg = txt("", 13, RED, altura=20)
@@ -1135,10 +1102,10 @@ class BotApp(App):
             except ValueError:
                 v = 0
             if not sym or v <= 0:
-                msg.text = "Informe um par e um valor válidos."
+                msg.text = "Informe um par e um valor validos."
                 return
             if any(r["par"] == sym for r in self.estado["regras"]):
-                msg.text = "Já existe uma regra para %s." % sym
+                msg.text = "Ja existe uma regra para %s." % sym
                 return
             msg.text = "Validando %s..." % sym
             msg.color = MUTED
@@ -1149,7 +1116,7 @@ class BotApp(App):
                 except Exception:
                     def erro(dt):
                         msg.color = RED
-                        msg.text = "Par inválido na Binance: %s" % sym
+                        msg.text = "Par invalido na Binance: %s" % sym
 
                     Clock.schedule_once(erro)
                     return
@@ -1180,7 +1147,6 @@ class BotApp(App):
         self.salvar()
         self.mostrar_sub("robo")
 
-    # --- motor do robô (mesma lógica do seu bot, 1m, ciclo de 10 s) ---
     def toggle_robo(self, sw, valor):
         if self._silencio:
             return
@@ -1193,13 +1159,11 @@ class BotApp(App):
             self.pedir_ignorar_bateria()
 
     def trocar_modelo(self, modelo):
-        """Escolhe as entradas do robô ao vivo: 'dia' (5m + 15m + VWAP + volume) ou 'antigo' (1m)."""
         self.estado["modelo"] = modelo
         self.salvar()
-        self.aviso("Perfil do robô: %s (vale para as próximas entradas)." % ("5m" if modelo == "dia" else "1m"))
+        self.aviso("Perfil do robo: %s (vale para as proximas entradas)." % modelo)
 
     def desligar_robo(self):
-        """Só marca como desligado; quem chama grava a config (salvar)."""
         if not self.estado["robo_ativo"]:
             return
         self.estado["robo_ativo"] = False
@@ -1209,7 +1173,6 @@ class BotApp(App):
             self._silencio = False
         self.atualizar_sub_robo()
 
-    # --- motor: serviço Android em primeiro plano (ou thread local como plano B) ---
     def garantir_motor(self):
         if self._iniciar_servico():
             self._modo_motor = "servico"
@@ -1228,12 +1191,12 @@ class BotApp(App):
             act = autoclass("org.kivy.android.PythonActivity").mActivity
             srv = autoclass(act.getPackageName() + ".ServiceBotservice")
             try:
-                srv.start(act, "icon", "Bot Trading Binance", "Robô em execução", "")
+                srv.start(act, "icon", "Bot Trading Binance", "Robo em execucao", "")
             except Exception:
                 srv.start(act, "")
             return True
         except Exception as e:
-            print("Serviço indisponível, usando motor local:", e)
+            print("Servico indisponivel, usando motor local:", e)
             return False
 
     def pedir_permissoes(self):
@@ -1243,10 +1206,9 @@ class BotApp(App):
             from android.permissions import request_permissions
             request_permissions(["android.permission.POST_NOTIFICATIONS"])
         except Exception as e:
-            print("Permissões:", e)
+            print("Permissoes:", e)
 
     def pedir_ignorar_bateria(self):
-        """Pede (uma vez por abertura) para o Android não limitar o app por bateria."""
         if platform != "android" or self._bat_pedido:
             return
         self._bat_pedido = True
@@ -1266,7 +1228,6 @@ class BotApp(App):
             print("Bateria:", e)
 
     def recarregar(self, dt=None):
-        """Lê o estado gravado pelo Motor (1x por segundo) e atualiza a tela."""
         novo = ler_json(self.arq_estado, None)
         if not novo:
             return
@@ -1295,7 +1256,6 @@ class BotApp(App):
                 self.mostrar_sub("robo")
             self.atualizar_saldo_real()
 
-    # --- Assistente IA ---
     def sub_ia(self):
         box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
         c = Card(bg=CARD, radius=18, orientation="vertical", size_hint_y=None,
@@ -1327,96 +1287,66 @@ class BotApp(App):
             return
         self.ia_inp.text = sym
         self.mostrar_card(self.ia_out, "Analisando %s..." % sym)
-        modo = self.estado["modo"]
-        modelo = self.estado.get("modelo", "dia")
+        perfil = PERFIS.get(self.estado.get("modelo", "5m"), PERFIL_5M)
 
         def job():
-            if modelo == "dia":
-                try:
-                    d, i, sin = diagnostico_dia(sym)
-                except Exception:
-                    msg = "Não consegui analisar %s (par inválido, sem conexão ou poucos candles)." % sym
-                    Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
-                    return
-                inf = sin["info"]
-                tipo = escolher_tipo_dia(sin, ESTRATEGIAS)
-                linhas = []
-                for nm in ESTRATEGIAS:
-                    linhas.append("%s: %s" % (ROTULO[nm], "SIM" if sin[nm] else "não — " + sin["falhas"].get(nm, "?")))
-                if inf.get("atr_pct"):
-                    pp = params_atr(inf["atr_pct"])
-                    linhas.append("Saídas se entrar agora: stop -%.2f%% · trailing ativa %.2f%% / trava %.2f%%"
-                                  % (pp["stop_pct"], pp["trail_ativa"], pp["trail_trava"]))
-                msg = ("%s · 5m (última vela fechada)\nPreço: %s\nRSI14: %.1f · ATR: %.3f%% · volume rel.: %.2fx\n"
-                       "EMA9: %.4f · EMA21: %.4f · EMA50: %.4f\nVWAP do dia: %s · tendência 15m: %s\n\n%s\n\n"
-                       "Sinal: %s\n\nRegras de day trade (pullback na EMA21, bandeira, máxima de 20 velas com volume). "
-                       "Não é recomendação."
-                       % (sym, fmt_preco(inf.get("preco", 0)), inf.get("rsi", 0), inf.get("atr_pct", 0),
-                          inf.get("rvol", 0), inf.get("ema9", 0), inf.get("ema21", 0), inf.get("ema50", 0),
-                          fmt_preco(inf["vwap"]) if inf.get("vwap") else "—",
-                          "alta" if inf.get("ctx15") else "sem alta", "\n".join(linhas),
-                          ("COMPRA (%s)" % tipo) if tipo else "AGUARDAR"))
-                Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
-                return
             try:
-                velas = buscar_klines(sym, "1m", 70)
-                closes = [c[3] for c in velas][-50:]
-                a = analisar(closes, PARAMS["rsi_p"], atr_pct_velas(velas, PARAMS["atr_p"]))
-                if a is None:
-                    raise Exception("poucos candles")
-            except Exception as e:
-                msg = "Não consegui analisar %s (par inválido ou sem conexão)." % sym
+                d, i, sin = diagnostico_perfil(sym, perfil)
+            except Exception:
+                msg = "Nao consegui analisar %s (par invalido, sem conexao ou poucos candles)." % sym
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
                 return
-            hist = [h for h in self.hist(modo) if h.get("modelo", "antigo") == "antigo"]
-            tipo = tipo_prioritario(a)
-            prob = prever_probabilidade(hist, a["rsi"], a["ma9"], a["ma21"], a["vol"], a["preco"], tipo)
-            liberado = len(hist) < IA_MIN_HIST or prob > PROB_MIN
-            ent = escolher_entrada(a, ESTRATEGIAS)
-            sinal = ("COMPRA (%s)" % ent) if ent and liberado else (
-                "Gatilho %s, mas a IA bloqueou" % ent if ent else "AGUARDAR")
-            msg = ("%s · 1m (entradas antigas)\nPreço: %s\nRSI9: %.1f (anterior %.1f)\nMA9: %.4f · MA21: %.4f\n"
-                   "Tendência: %s · ATR9 %.3f%%\n"
-                   "Pullback: %s · Continuidade: %s · Rompimento: %s\n"
-                   "Prob. IA: %.2f (%d trades no histórico)\n\nSinal: %s\n\n"
-                   "Heurística do robô, não é recomendação."
-                   % (sym, fmt_preco(a["preco"]), a["rsi"], a["rsi_ant"], a["ma9"], a["ma21"],
-                      "alta" if a["tend"] else "baixa", a["vol"],
-                      "sim" if a["pullback"] else "não", "sim" if a["continuidade"] else "não",
-                      "sim" if a["rompimento"] else "não", prob, len(hist), sinal))
+            inf = sin["info"]
+            tipo = escolher_tipo_dia(sin, ESTRATEGIAS)
+            linhas = []
+            for nm in ESTRATEGIAS:
+                linhas.append("%s: %s" % (ROTULO[nm], "SIM" if sin[nm] else "nao - " + sin["falhas"].get(nm, "?")))
+            if inf.get("atr_pct"):
+                pp = params_atr(inf["atr_pct"])
+                linhas.append("Saidas se entrar agora: stop -%.2f%% . trailing ativa %.2f%% / trava %.2f%%"
+                              % (pp["stop_pct"], pp["trail_ativa"], pp["trail_trava"]))
+            msg = ("%s . perfil %s (ultima vela fechada)\nPreco: %s\nRSI%d: %.1f . ATR: %.3f%% . volume rel.: %.2fx\n"
+                   "EMA9: %.4f . EMA21: %.4f . EMA50: %.4f\nVWAP do dia: %s . semaforo %s: %s\n\n%s\n\n"
+                   "Sinal: %s\n\nRegras do perfil %s. Nao e recomendacao."
+                   % (sym, perfil["nome"], fmt_preco(inf.get("preco", 0)),
+                      perfil["rsi_p"], inf.get("rsi", 0), inf.get("atr_pct", 0),
+                      inf.get("rvol", 0), inf.get("ema9", 0), inf.get("ema21", 0), inf.get("ema50", 0),
+                      fmt_preco(inf["vwap"]) if inf.get("vwap") else "-",
+                      perfil["tf_semaforo"],
+                      "alta" if inf.get("ctx") else "sem alta", "\n".join(linhas),
+                      ("COMPRA (%s)" % tipo) if tipo else "AGUARDAR", perfil["nome"]))
             Clock.schedule_once(lambda dt: self.mostrar_card(self.ia_out, msg))
 
         threading.Thread(target=job, daemon=True).start()
 
-    # --- Backtest ---
     def sub_backtest(self):
         box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
         c = Card(bg=CARD, radius=18, orientation="vertical", size_hint_y=None,
                  padding=dp(20), spacing=dp(12))
-        c.add_widget(txt("Backtest Rápido", 24, TEXT, True, altura=34))
-        d = txt("Simula o perfil do robô nos últimos N dias com candles reais. O perfil define o intervalo, "
-                "os indicadores e o ATR (a volatilidade é medida pelo ATR, sem valor manual).", 15, MUTED)
+        c.add_widget(txt("Backtest Rapido", 24, TEXT, True, altura=34))
+        d = txt("Simula o perfil do robo nos ultimos N dias com candles reais. O perfil define o intervalo, "
+                "os indicadores e o ATR (a volatilidade e medida pelo ATR, sem valor manual).", 15, MUTED)
         d.size_hint_y = None
         d.height = dp(74)
         c.add_widget(d)
-        c.add_widget(txt("Par(es) · qualquer par, separados por espaço", 15, MUTED, altura=22))
+        c.add_widget(txt("Par(es) . qualquer par, separados por espaco", 15, MUTED, altura=22))
         self.bt_pares = campo_texto(self.bt["pares"], "ex.: BTCUSDT PEPEUSDT SOLUSDT", 17)
         self.bt_pares.bind(text=lambda w, v: self.bt.__setitem__("pares", v))
         c.add_widget(self.bt_pares)
-        c.add_widget(txt("Perfil do robô", 15, MUTED, altura=22))
-        rot_bt = {"dia": "Perfil 5m", "antigo": "Perfil 1m"}
+        c.add_widget(txt("Perfil do robo", 15, MUTED, altura=22))
+        rot_bt = {"5m": "Perfil 5m", "1m": "Perfil 1m"}
         c.add_widget(chip_row(list(rot_bt.values()), rot_bt.get(self.bt["modelo"], "Perfil 5m"),
-                              lambda r: self.bt.__setitem__("modelo", "dia" if "5m" in r else "antigo"),
+                              lambda r: self.bt.__setitem__("modelo", "5m" if "5m" in r else "1m"),
                               altura=46, tam=14))
-        dp_ = txt("5m: entradas Dia (EMA 9/21, RSI 14, ATR 14) + stop e escada proporcionais ao ATR. "
-                  "1m: entradas antigas (MA 9/21, RSI 9, ATR 9) + stop e escada fixos (máx. 30 dias).", 13, MUTED)
+        dp_ = txt("5m: gatilho 5m, semaforo 15m, EMA 9/21, RSI 14, ATR 14 + stop/escada por ATR. "
+                  "1m: gatilho 1m, semaforo 5m, EMA 9/21, RSI 9, ATR 9 + stop/escada por ATR (max. 30 dias).", 13, MUTED)
         dp_.size_hint_y = None
         dp_.height = dp(70)
         c.add_widget(dp_)
         c.add_widget(txt("Regras de entrada", 15, MUTED, altura=22))
         c.add_widget(toggle_row([(k, ROTULO[k]) for k in ESTRATEGIAS], self.bt["estr"],
                                 lambda lst: self.bt.__setitem__("estr", lst), altura=46, tam=13))
-        c.add_widget(txt("Período", 15, MUTED, altura=22))
+        c.add_widget(txt("Periodo", 15, MUTED, altura=22))
         c.add_widget(chip_row(["3d", "7d", "14d", "30d", "60d", "90d"], self.bt["dias"],
                               lambda k: self.bt.__setitem__("dias", k), altura=46, tam=13))
         c.add_widget(txt("Valor por ordem (USDT)", 15, MUTED, altura=22))
@@ -1424,19 +1354,18 @@ class BotApp(App):
         bv.bind(text=lambda w, v: self.bt.__setitem__("valor", v))
         c.add_widget(bv)
 
-        # ---- Avançado (fechado por padrão)
         av = BoxLayout(orientation="vertical", spacing=dp(10))
-        av.add_widget(txt("Saídas secundárias (desligue para testar)", 15, MUTED, altura=22))
+        av.add_widget(txt("Saidas secundarias (desligue para testar)", 15, MUTED, altura=22))
         ativos_sec = [k for k, on in (("rev", self.bt["rev"]), ("tend", self.bt["tend"])) if on]
 
         def mudou_sec(lst):
             self.bt["rev"] = "rev" in lst
             self.bt["tend"] = "tend" in lst
 
-        av.add_widget(toggle_row([("rev", "Reversão forte"), ("tend", "Perdeu tendência")], ativos_sec,
+        av.add_widget(toggle_row([("rev", "Reversao forte"), ("tend", "Perdeu tendencia")], ativos_sec,
                                  mudou_sec, altura=46, tam=13, minimo=0))
         for pares_campos in ((("ativa", "Trailing ativa (%)"), ("trava", "Trailing trava (%)")),
-                             (("stop", "Stop mín. (%)"), ("stopmax", "Stop máx. (%, só 5m)"))):
+                             (("stop", "Stop min. (%)"), ("stopmax", "Stop max. (%)"))):
             lin = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
             for chave, rot in pares_campos:
                 col = BoxLayout(orientation="vertical", spacing=dp(2))
@@ -1446,18 +1375,27 @@ class BotApp(App):
                 col.add_widget(f)
                 lin.add_widget(col)
             av.add_widget(lin)
+
+        funil_linha = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
+        funil_linha.add_widget(txt("Mostrar funil de filtros", 14, TEXT))
+        self.sw_funil = Switch(active=bool(self.bt.get("funil", False)),
+                               size_hint=(None, None), size=(dp(80), dp(46)))
+        self.sw_funil.bind(active=lambda w, v: self.bt.__setitem__("funil", bool(v)))
+        funil_linha.add_widget(self.sw_funil)
+        av.add_widget(funil_linha)
+
         auto_altura(av)
         estado_av = {"aberto": False}
-        btn_av = RoundBtn(bg=CARD2, text="Avançado (mostrar)", font_size=sp(15),
+        btn_av = RoundBtn(bg=CARD2, text="Avancado (mostrar)", font_size=sp(15),
                           size_hint_y=None, height=dp(46), radius=14)
 
         def alternar(*_):
             if estado_av["aberto"]:
                 c.remove_widget(av)
-                btn_av.text = "Avançado (mostrar)"
+                btn_av.text = "Avancado (mostrar)"
             else:
-                c.add_widget(av, index=1)          # logo acima do botão "Rodar backtest"
-                btn_av.text = "Avançado (ocultar)"
+                c.add_widget(av, index=1)
+                btn_av.text = "Avancado (ocultar)"
             estado_av["aberto"] = not estado_av["aberto"]
 
         btn_av.bind(on_release=alternar)
@@ -1489,75 +1427,125 @@ class BotApp(App):
              "stop_pct": num("stop", STOP_PCT), "stop_max": num("stopmax", PARAMS["stop_max"]),
              "sec_rev": bool(self.bt.get("rev", True)), "sec_trend": bool(self.bt.get("tend", True))}
         if p["stop_max"] < p["stop_pct"]:
-            return self.aviso("O stop máximo deve ser maior ou igual ao stop mínimo.")
+            return self.aviso("O stop maximo deve ser maior ou igual ao stop minimo.")
         if p["trail_trava"] >= p["trail_ativa"]:
             return self.aviso("O trailing deve travar abaixo de onde ativa (ex.: ativa 0.45, trava 0.25).")
         dias = int(self.bt["dias"][:-1])
-        modelo = self.bt.get("modelo", "dia")
-        if modelo != "dia" and dias > 30:
-            return self.aviso("No Perfil 1m o máximo é 30 dias (são muitos candles de 1 minuto).")
+        modelo = self.bt.get("modelo", "5m")
+        perfil = PERFIS.get(modelo, PERFIL_5M)
+        if modelo == "1m" and dias > 30:
+            return self.aviso("No Perfil 1m o maximo e 30 dias (sao muitos candles de 1 minuto).")
         ativas = list(self.bt["estr"])
-        self.mostrar_card(self.bt_out, "Rodando backtest...")
+        usar_funil = bool(self.bt.get("funil", False))
+        self.mostrar_card(self.bt_out, "Preparando backtest...")
 
-        def prog(msg):
+        ultimo_upd = {"t": 0.0}
+
+        def prog(msg, forcar=False):
+            agora = time.time()
+            if not forcar and agora - ultimo_upd["t"] < 1.0:
+                return
+            ultimo_upd["t"] = agora
             Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, msg))
 
         def job():
-            partes, tot_n, tot_soma = [], 0, 0.0
-            for i, sym in enumerate(pares):
-                prog("Rodando %s (%d/%d)..." % (sym, i + 1, len(pares)))
-                st = {}
-                try:
-                    if modelo == "dia":
-                        # baixa 2 dias a mais só para "aquecer" os indicadores (15m, EMA50, VWAP)
+            try:
+                partes, tot_n, tot_soma = [], 0, 0.0
+                funil_global = core._funil_novo() if usar_funil else None
+
+                for i, sym in enumerate(pares):
+                    prog("Baixando %s (%d/%d)..." % (sym, i + 1, len(pares)), forcar=True)
+                    t0 = time.time()
+                    tf_gat = perfil["tf_gatilho"]
+
+                    def cb_download(baixados, estimado, _sym=sym, _i=i):
+                        pct = (baixados / estimado * 100) if estimado else 0
+                        prog("Baixando %s (%d/%d): %d/%d candles (%.0f%%)" % (
+                            _sym, _i + 1, len(pares), baixados, estimado, pct))
+
+                    try:
                         t_ini = int(time.time() * 1000) - dias * 86400000
-                        candles = velas_fechadas(baixar_candles(sym, "5m", dias + 2))
-                        if len(candles) < 200:
-                            partes.append("%s: poucos candles (par novo ou inválido)." % sym)
-                            continue
-                        trades = backtest_dia(candles, ativas, p, t_ini, st)
+                        candles = velas_fechadas(
+                            baixar_candles(sym, tf_gat, dias + 2, progresso=cb_download),
+                            INTERVALO_S[tf_gat])
+                    except Exception as e:
+                        partes.append("%s: erro no download (%s)" % (sym, str(e)[:80]))
+                        continue
+
+                    dt_dl = time.time() - t0
+                    if len(candles) < 200:
+                        partes.append("%s: poucos candles (%d, par novo ou invalido)." % (sym, len(candles)))
+                        continue
+
+                    prog("Processando %s (%d/%d): %d candles..." % (
+                        sym, i + 1, len(pares), len(candles)), forcar=True)
+                    t1 = time.time()
+
+                    def cb_proc(feitos, total, _sym=sym, _i=i):
+                        pct = (feitos / total * 100) if total else 0
+                        prog("Processando %s (%d/%d): %d/%d velas (%.0f%%)" % (
+                            _sym, _i + 1, len(pares), feitos, total, pct))
+
+                    st = {}
+                    f_par = core._funil_novo() if usar_funil else None
+
+                    try:
+                        trades = backtest_perfil(candles, ativas, perfil, p, t_ini, st,
+                                                 funil=f_par, progresso_cb=cb_proc)
+                    except Exception as e:
+                        partes.append("%s: erro no processamento (%s)" % (sym, str(e)[:80]))
+                        continue
+
+                    dt_proc = time.time() - t1
+
+                    resumo_par = []
+                    if not trades:
+                        resumo_par.append("%s: nenhuma operacao. (download %.1fs . processamento %.1fs)" % (
+                            sym, dt_dl, dt_proc))
                     else:
-                        candles = baixar_candles(sym, "1m", dias)
-                        if len(candles) < 100:
-                            partes.append("%s: poucos candles (par novo ou inválido)." % sym)
-                            continue
-                        trades = backtest_par(candles, ativas, p, st)
-                except Exception as e:
-                    partes.append("%s: erro (%s)" % (sym, str(e)[:80]))
-                    continue
-                if not trades:
-                    partes.append("%s: nenhuma operação." % sym)
-                    continue
-                n, soma, texto = resumo_trades(trades, valor, dias)
-                if modelo == "dia" and st.get("stop_medio"):
-                    texto += "\nATR14 5m médio %.2f%% · stop médio %.2f%% · trailing ativa média %.2f%%" % (
-                        st["atr_medio"], st["stop_medio"], st["ativa_media"])
-                elif modelo != "dia" and st:
-                    texto += "\nATR9 1m médio %.3f%% · velas com ATR acima do mínimo (%.2f%%): %.0f%%" % (
-                        st["atr_medio"], ATR_MIN_1M, st["pct_filtro"])
-                tot_n += n
-                tot_soma += soma
-                partes.append("%s · %s" % (sym, texto))
-            sec = "Reversão forte %s · Perdeu tendência %s" % (
-                "ON" if p["sec_rev"] else "OFF", "ON" if p["sec_trend"] else "OFF")
-            if modelo == "dia":
-                cab = ("Perfil 5m (EMA 9/21, RSI 14, ATR 14; stop/escada por ATR) · %s · %d dias\n"
-                       "ATR14 mín. %.2f%% · stop %.2f–%.2f%% · trailing ativa ≥ %.2f%% / trava ≥ %.2f%%\n%s · ordem %.0f USDT\n\n" % (
-                           " ".join(ROTULO[e] for e in ativas), dias, VOL_MIN, p["stop_pct"], p["stop_max"],
-                           p["trail_ativa"], p["trail_trava"], sec, valor))
-            else:
-                cab = ("Perfil 1m (MA 9/21, RSI 9, ATR 9; stop/escada fixos) · %s · %d dias\n"
-                       "ATR9 mín. %.2f%% · stop %.2f%% · trailing ativa %.2f%% / trava %.2f%%\n%s · ordem %.0f USDT\n\n" % (
-                           " ".join(ROTULO[e] for e in ativas), dias, ATR_MIN_1M, p["stop_pct"],
-                           p["trail_ativa"], p["trail_trava"], sec, valor))
-            if len(pares) > 1 and tot_n:
-                liq = tot_soma - TAXA_IDA_VOLTA * tot_n
-                partes.append("TOTAL: %d op · soma %+.2f%% (≈ %+.2f USDT) · c/ taxa %+.2f%% (≈ %+.2f USDT)" % (
-                    tot_n, tot_soma, valor * tot_soma / 100, liq, valor * liq / 100))
-            rodape = "\n\nExecução no fechamento do candle; stop/trailing checados na mínima. " \
-                     "Sem filtro de IA e sem slippage."
-            msg = cab + "\n\n".join(partes) + rodape
-            Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, msg))
+                        n, soma, texto = resumo_trades(trades, valor, dias)
+                        if st.get("stop_medio"):
+                            texto += "\nATR%d %s medio %.2f%% . stop medio %.2f%% . trailing ativa media %.2f%%" % (
+                                perfil["atr_p"], perfil["tf_gatilho"], st["atr_medio"],
+                                st["stop_medio"], st["ativa_media"])
+                        texto += "\nTempo: download %.1fs . processamento %.1fs" % (dt_dl, dt_proc)
+                        tot_n += n
+                        tot_soma += soma
+                        resumo_par.append("%s . %s" % (sym, texto))
+
+                    if usar_funil and f_par is not None:
+                        resumo_par.append("\n" + core.formatar_funil(f_par, perfil["nome"], dias))
+                        if funil_global is not None:
+                            core._funil_somar(funil_global, f_par)
+
+                    partes.append("\n".join(resumo_par))
+
+                sec = "Reversao forte %s . Perdeu tendencia %s" % (
+                    "ON" if p["sec_rev"] else "OFF", "ON" if p["sec_trend"] else "OFF")
+                cab = ("Perfil %s (gatilho %s, semaforo %s; EMA 9/21, RSI %d, ATR %d; stop/escada por ATR) . %s . %d dias\n"
+                       "ATR%d min. %.2f%% . stop %.2f-%.2f%% . trailing ativa >= %.2f%% / trava >= %.2f%%\n%s . ordem %.0f USDT\n\n" % (
+                           perfil["nome"], perfil["tf_gatilho"], perfil["tf_semaforo"],
+                           perfil["rsi_p"], perfil["atr_p"],
+                           " ".join(ROTULO[e] for e in ativas), dias, perfil["atr_p"], perfil["vol_min"],
+                           p["stop_pct"], p["stop_max"], p["trail_ativa"], p["trail_trava"], sec, valor))
+
+                if len(pares) > 1 and tot_n:
+                    liq = tot_soma - TAXA_IDA_VOLTA * tot_n
+                    partes.append("TOTAL: %d op . soma %+.2f%% (aprox %+.2f USDT) . c/ taxa %+.2f%% (aprox %+.2f USDT)" % (
+                        tot_n, tot_soma, valor * tot_soma / 100, liq, valor * liq / 100))
+
+                if usar_funil and len(pares) > 1 and funil_global is not None:
+                    partes.append("\n=== FUNIL CONSOLIDADO ===\n" +
+                                  core.formatar_funil(funil_global, perfil["nome"], dias))
+
+                rodape = "\n\nExecucao no fechamento do candle; stop/trailing checados na minima. Sem filtro de IA e sem slippage."
+                msg = cab + "\n\n".join(partes) + rodape
+                Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, msg))
+
+            except Exception as e:
+                import traceback
+                erro_msg = "ERRO NO BACKTEST:\n\n%s\n\n%s" % (str(e), traceback.format_exc()[-400:])
+                Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, erro_msg))
 
         threading.Thread(target=job, daemon=True).start()
 

@@ -41,9 +41,9 @@ PERFIL_5M = {
 }
 
 PERFIL_1M = {
-    "nome": "1m", "tf_gatilho": "1m", "tf_semaforo": "1m",
+    "nome": "1m", "tf_gatilho": "1m", "tf_semaforo": "5m",
     "ma_f": 9, "ma_s": 21, "atr_p": 9, "rsi_p": 9,
-    "vol_min": 0.02, "vwap": False, "ctx_ma": 21,
+    "vol_min": 0.02, "vwap": True, "ctx_ma": 21,
     "n_compressao": 5, "atr_compressao": 5.0, "atr_esticado": 6.0,
     "rsi_pull_min": 20, "rsi_pull_max": 70, "rsi_cont_min": 40, "rsi_cont_max": 80
 }
@@ -190,6 +190,9 @@ class Binance:
             raise Exception("Invalid quantity: %s abaixo do minimo" % qtd)
         res = self._assinado("POST", "/api/v3/order", {"symbol": sym, "side": "SELL", "type": "MARKET", "quantity": format(q.normalize(), "f")})
         return self._resumo(res, sym)
+
+# FIM DA PARTE 1 DO CORE
+
 
 def calcular_rsi(closes, period=14):
     if len(closes) < period + 1:
@@ -483,6 +486,9 @@ def params_atr(atr_pct, base=None):
     b.update(stop_pct=stop, trail_ativa=ativa, trail_trava=trava, escala=(ativa / a0 if a0 > 0 else 1.0))
     return b
 
+# FIM DA PARTE 2 DO CORE
+
+
 def trava_trailing(lucro_max, trava1=None, esc=1.0):
     t1 = TRAIL_TRAVA if trava1 is None else trava1
     if lucro_max < 0.70 * esc: return t1
@@ -573,9 +579,6 @@ def resumo_trades(trades, valor, dias=None):
     for k, v in _grupo(trades, lambda t: re.sub(r" -[\d.]+%$", "", t["motivo"].split(" (")[0])):
         linhas.append("  %s: %d . media %+.2f%% . soma %+.1f%%" % (k, len(v), sum(v) / len(v), sum(v)))
     return n, soma, "\n".join(linhas)
-    
-# FIM DA PARTE 1
-
 
 def backtest_perfil(candles, ativas, perfil, p=None, t_ini=0, stats=None, funil=None, progresso_cb=None):
     p = dict(PARAMS, **(p or {}))
@@ -660,11 +663,11 @@ def lista_pares(texto, maximo=8):
 
 ARQ_CONFIG = "config_ui.json"
 ARQ_ESTADO = "estado_app.json"
-CONFIG_KEYS = ("modo", "robo_ativo", "regras", "cfg", "modelo")
+CONFIG_KEYS = ("modo", "robo_ativo", "regras", "cfg", "modelo", "custom_params")
 ESTADO_KEYS = ("saldo", "posicoes", "pos_sim", "pos_real", "pos_manual_real", "execucoes", "ia", "ia_sim", "ultimo", "resultados", "msg_robo", "hb", "origem", "inicio", "ciclo_ts")
 
 def config_padrao():
-    return {"modo": "SIM", "robo_ativo": False, "modelo": "5m", "regras": [{"par": p, "valor": 12, "estrategias": list(ESTRATEGIAS)} for p in ("BTCUSDT", "SOLUSDT", "BNBUSDT")], "cfg": {"key": "", "secret": "", "testnet": True}}
+    return {"modo": "SIM", "robo_ativo": False, "modelo": "5m", "regras": [{"par": p, "valor": 12, "estrategias": list(ESTRATEGIAS)} for p in ("BTCUSDT", "SOLUSDT", "BNBUSDT")], "cfg": {"key": "", "secret": "", "testnet": True}, "custom_params": {}}
 
 def estado_servico_padrao():
     return {"saldo": 10000.0, "posicoes": {}, "pos_sim": {}, "pos_real": {}, "pos_manual_real": {}, "execucoes": [], "ia": [], "ia_sim": [], "ultimo": {}, "resultados": {}, "msg_robo": "", "hb": 0, "origem": "", "inicio": 0, "ciclo_ts": 0}
@@ -768,6 +771,13 @@ class Motor:
                 novo["cfg"] = dict(config_padrao()["cfg"], **novo.get("cfg", {}))
                 for r in novo["regras"]: r.setdefault("estrategias", list(ESTRATEGIAS))
                 if novo.get("modelo") not in PERFIS: novo["modelo"] = "5m"
+                
+                # ATUALIZA OS PARAMS GLOBAIS COM OS DADOS VINDOS DA INTERFACE
+                custom = novo.get("custom_params", {})
+                for k, v in custom.items():
+                    if k in PARAMS:
+                        PARAMS[k] = v
+                
                 self.config = novo
                 self._cfg_mtime = m
                 self._ativo_em = time.time()

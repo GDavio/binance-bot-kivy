@@ -44,6 +44,20 @@ PARES = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGE
 TF_LISTA = ["1m", "5m", "15m", "1h", "4h", "1D"]
 TF_API = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1h", "4h": "4h", "1D": "1d"}
 
+DICAS = {
+    "stop_pct": "É o limite máximo de perda que você aceita. Se o preço cair isso, o robô vende para não virar prejuízo grande.",
+    "stop_max": "Quando a volatilidade (ATR) está muito alta, o robô ajusta o Stop Loss para não ser parado pelo ruído. Esse é o teto máximo que ele pode chegar.",
+    "trail_ativa": "Se a operação subir esse valor (ex: 0.80%), o robô liga a escada de proteção de lucro.",
+    "trail_trava": "Depois que a escada liga, se o preço começar a cair de volta, o robô vende travando pelo menos esse valor de lucro.",
+    "corpo_estouro": "Para o rompimento ser válido, a vela de explosão precisa ter um corpo (tamanho) X vezes maior que a média das velas anteriores.",
+    "vol_estouro": "A vela de rompimento precisa ter um volume X vezes maior que a média de volume dos últimos candles.",
+    "n_compressao": "Quantos candles para trás o robô olha para ver se o preço está parado (formando a caixinha/compressão).",
+    "atr_compressao": "A faixa de preço da compressão não pode ser maior que X vezes o ATR. Garante que está realmente parado.",
+    "atr_esticado": "O robô não compra se o preço já subiu muito de uma vez (esticou). Se o preço estiver mais de X vezes o ATR acima da EMA21, o robô espera cair um pouco.",
+    "sec_rev": "Saída por Reversão: O mercado estava subindo, mas de repente despencou com força. O robô sai para não tomar prejuízo.",
+    "sec_trend": "Saída por Perda de Tendência: A tendência de alta perdeu força (EMA9 cruzou para baixo da EMA21). O robô encerra a operação antes do Stop Loss bater."
+}
+
 def txt(texto, tam=14, cor=TEXT, bold=False, halign="left", altura=None, **kw):
     lb = Label(text=texto, font_size=sp(tam), color=cor, bold=bold,
                halign=halign, valign="middle", **kw)
@@ -275,6 +289,9 @@ class CandleChart(Widget):
                 Line(points=pts, width=1.3)
             self._t("RSI14", xa + dp(4), ry(100) + dp(10), YELLOW, 12)
 
+# FIM DA PARTE 1 DO MAIN
+
+
 class BotApp(App):
     title = "Bot Binance"
 
@@ -348,6 +365,7 @@ class BotApp(App):
         if migrando and d["modo"] == "REAL":
             d["robo_ativo"] = False
         d["cfg"] = dict(config_padrao()["cfg"], **d.get("cfg", {}))
+        d["custom_params"] = dict(d.get("custom_params", {}))
         for r in d["regras"]:
             r.setdefault("estrategias", list(ESTRATEGIAS))
         if d.get("modelo") not in PERFIS:
@@ -839,8 +857,8 @@ class BotApp(App):
         box = BoxLayout(orientation="vertical", padding=[dp(14), dp(10)], spacing=dp(12))
         sw = Card(bg=CARD, radius=18, size_hint_y=None, height=dp(58), padding=dp(5), spacing=dp(4))
         self.sub_btns = {}
-        for chave, rotulo in (("robo", "Robo"), ("ia", "Assistente IA"), ("backtest", "Backtest")):
-            b = RoundBtn(bg=CLEAR, fg=TEXT, text=rotulo, font_size=sp(15), radius=14)
+        for chave, rotulo in (("robo", "Robo"), ("ia", "Assistente IA"), ("backtest", "Backtest"), ("manual", "Manual")):
+            b = RoundBtn(bg=CLEAR, fg=TEXT, text=rotulo, font_size=sp(14), radius=14)
             b.bind(on_release=lambda inst, k=chave: self.mostrar_sub(k))
             self.sub_btns[chave] = b
             sw.add_widget(b)
@@ -864,8 +882,72 @@ class BotApp(App):
             self.sub_area.add_widget(self.sub_robo())
         elif chave == "ia":
             self.sub_area.add_widget(self.sub_ia())
-        else:
+        elif chave == "backtest":
             self.sub_area.add_widget(self.sub_backtest())
+        else:
+            self.sub_area.add_widget(self.sub_manual())
+
+    def _ajuda(self, chave):
+        msg = DICAS.get(chave, "Sem informacoes.")
+        box = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(12))
+        box.add_widget(txt("Ajuda", 18, YELLOW, True, altura=28))
+        box.add_widget(txt(msg, 15, TEXT, False, "left"))
+        pop = Popup(title="", separator_height=0, content=box, size_hint=(0.85, None),
+                    height=dp(250), background="", background_color=CARD)
+        btn = RoundBtn(bg=CARD2, text="Entendi", radius=14, size_hint_y=None, height=dp(46))
+        btn.bind(on_release=lambda *_: pop.dismiss())
+        box.add_widget(btn)
+        pop.open()
+
+    def _label_com_ajuda(self, texto, chave_dica):
+        lin = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
+        lin.add_widget(txt(texto, 14, TEXT))
+        if chave_dica:
+            b = RoundBtn(bg=CLEAR, fg=BLUE, text="(i)", font_size=sp(14), bold=True,
+                         size_hint=(None, None), size=(dp(30), dp(30)), radius=15)
+            b.bind(on_release=lambda *_: self._ajuda(chave_dica))
+            lin.add_widget(b)
+        lin.add_widget(Widget())
+        return lin
+
+    def sub_manual(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
+        
+        box.add_widget(txt("Manual do Robô", 22, TEXT, True, altura=36))
+        box.add_widget(txt("Entenda o que cada função faz.", 14, MUTED, altura=22))
+        
+        # Bloco 1
+        c1 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
+        c1.add_widget(txt("Estratégias de Entrada", 16, YELLOW, True))
+        c1.add_widget(txt_auto("Pullback (Correção): O preço estava subindo, recuou um pouco e está voltando a subir. O robô compra na 'promoção'.\n\nContinuidade (Tendência): O preço está em uma bandeira (lateralização) dentro de uma forte tendência de alta. O robô compra quando ele rompe a bandeira.\n\nRompimento (Explosão): O preço ficou comprimido (andando de lado) e de repente explode para cima com força. O robô compra no estouro.", 14, TEXT))
+        auto_altura(c1)
+        box.add_widget(c1)
+        
+        # Bloco 2
+        c2 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
+        c2.add_widget(txt("Saídas Secundárias", 16, YELLOW, True))
+        c2.add_widget(txt_auto("Stop Loss: Limite máximo de perda. Se o preço cair isso, o robô vende para não virar prejuízo grande.\n\nTrailing Stop: Proteção de lucro. Se o preço subir, o robô 'sobe a escada' e trava o lucro, garantindo que você não devolva o dinheiro ganho.\n\nSaída por Reversão: O mercado despencou com força. O robô sai antes do Stop Loss bater.\n\nSaída por Perda de Tendência: A tendência de alta perdeu força. O robô encerra a operação antes do Stop Loss bater.", 14, TEXT))
+        auto_altura(c2)
+        box.add_widget(c2)
+        
+        # Bloco 3
+        c3 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
+        c3.add_widget(txt("Configurando os Parâmetros", 16, YELLOW, True))
+        c3.add_widget(txt_auto("Stop Loss (%): O limite máximo de perda que você aceita.\nTrailing Stop (%): Se a operação subir X%, o robô liga a proteção. Se cair, trava Y% de lucro.\nForça da Vela (x): A vela de rompimento precisa ter um corpo X vezes maior que a média.\nVolume do Rompimento (x): A vela de rompimento precisa ter um volume X vezes maior que a média.\nVelas de Compressão: Quantos candles o robô olha para trás para achar a 'caixinha'.\nATR (Volatilidade): Mede o quão agitado o mercado está.", 14, TEXT))
+        auto_altura(c3)
+        box.add_widget(c3)
+        
+        # Bloco 4
+        c4 = Card(bg=RED, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
+        c4.add_widget(txt("Avisos Importantes", 16, TEXT, True))
+        c4.add_widget(txt_auto("Risco: O mercado de criptomoedas é altamente volátil. Nenhum robô é 100% garantido.\n\nTaxas da Binance: Cada ordem custa 0.1% (ida e volta = 0.2%). Em timeframes curtos (1m), as taxas podem consumir o lucro.\n\nModo Simulação vs Real: No modo SIMULAÇÃO, você usa um saldo virtual. No modo REAL, o robô usa a sua conta.", 14, TEXT))
+        auto_altura(c4)
+        box.add_widget(c4)
+
+        return rolavel(box)
+
+# FIM DA PARTE 2 DO MAIN
+
 
     def sub_robo(self):
         est = self.estado
@@ -883,17 +965,87 @@ class BotApp(App):
         c1.add_widget(self.sw_robo)
         box.add_widget(c1)
         self.atualizar_sub_robo()
+        
         box.add_widget(txt("Perfil do robo", 15, MUTED, altura=22))
         rot_mod = {"5m": "Perfil 5m", "1m": "Perfil 1m"}
         box.add_widget(chip_row(list(rot_mod.values()), rot_mod.get(est.get("modelo", "5m"), "Perfil 5m"),
                                 lambda r: self.trocar_modelo("5m" if "5m" in r else "1m"),
                                 altura=44, tam=14))
+        
         info_p = txt("5m: gatilho 5m, semaforo 15m, EMA 9/21, RSI 14, ATR 14. "
-                     "1m: gatilho 1m, semaforo 5m, EMA 9/21, RSI 9, ATR 9. "
-                     "Mesmas 3 estrategias; stop/escada proporcionais ao ATR do perfil.", 13, MUTED)
+                     "1m: gatilho 1m, semaforo 5m, EMA 9/21, RSI 9, ATR 9.", 13, MUTED)
         info_p.size_hint_y = None
-        info_p.height = dp(70)
+        info_p.height = dp(40)
         box.add_widget(info_p)
+
+        box.add_widget(self._label_com_ajuda("Saídas Secundárias", "sec_rev"))
+        ativos_sec = []
+        custom = est.get("custom_params", {})
+        if custom.get("sec_rev", PARAMS.get("sec_rev", True)): ativos_sec.append("rev")
+        if custom.get("sec_trend", PARAMS.get("sec_trend", True)): ativos_sec.append("tend")
+
+        def mudou_sec(lst):
+            with self.lock:
+                cp = self.estado.get("custom_params", {})
+                cp["sec_rev"] = "rev" in lst
+                cp["sec_trend"] = "tend" in lst
+                self.estado["custom_params"] = cp
+            self.salvar()
+
+        box.add_widget(toggle_row([("rev", "Reversão Forte"), ("tend", "Perdeu Tendência")], ativos_sec,
+                                  mudou_sec, altura=46, tam=13, minimo=0))
+
+        btn_ajustes = RoundBtn(bg=CARD2, text="Ajustes Fino do Robo (Parametros)", font_size=sp(15), size_hint_y=None, height=dp(50), radius=14)
+        box.add_widget(btn_ajustes)
+        
+        painel_params = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
+        auto_altura(painel_params)
+        
+        def get_p(k):
+            return str(custom.get(k, PARAMS.get(k, 0)))
+            
+        campos = [
+            ("stop_pct", "Stop Loss Mínimo (%)", get_p("stop_pct"), "stop_pct"),
+            ("stop_max", "Stop Loss Máximo (%)", get_p("stop_max"), "stop_max"),
+            ("trail_ativa", "Ativar Trailing (%)", get_p("trail_ativa"), "trail_ativa"),
+            ("trail_trava", "Travar Lucro Mínimo (%)", get_p("trail_trava"), "trail_trava"),
+            ("corpo_estouro", "Força da Vela (x)", get_p("corpo_estouro"), "corpo_estouro"),
+            ("vol_estouro", "Volume do Rompimento (x)", get_p("vol_estouro"), "vol_estouro"),
+            ("n_compressao", "Velas de Compressão", get_p("n_compressao"), "n_compressao"),
+            ("atr_compressao", "Máx. Volatilidade Compressão", get_p("atr_compressao"), "atr_compressao"),
+            ("atr_esticado", "Máx. Esticamento (ATR)", get_p("atr_esticado"), "atr_esticado"),
+        ]
+        
+        inputs = {}
+        for k, lbl, val, dica in campos:
+            painel_params.add_widget(self._label_com_ajuda(lbl, dica))
+            inp = campo_numero(val, 18)
+            painel_params.add_widget(inp)
+            inputs[k] = inp
+            
+        btn_salvar_p = RoundBtn(bg=GREEN, fg=DARK, text="Salvar Parametros", font_size=sp(16), size_hint_y=None, height=dp(50), radius=14)
+        painel_params.add_widget(btn_salvar_p)
+        
+        def toggle_painel(*_):
+            if painel_params.parent:
+                box.remove_widget(painel_params)
+            else:
+                box.add_widget(painel_params)
+                
+        def salvar_p(*_):
+            novo_custom = dict(self.estado.get("custom_params", {}))
+            for k, inp in inputs.items():
+                try:
+                    novo_custom[k] = float(inp.text)
+                except ValueError:
+                    pass
+            with self.lock:
+                self.estado["custom_params"] = novo_custom
+            self.salvar()
+            self.aviso("Parametros salvos! O robo usara os novos valores na proxima operacao.")
+            
+        btn_ajustes.bind(on_release=toggle_painel)
+        btn_salvar_p.bind(on_release=salvar_p)
 
         topo = BoxLayout(size_hint_y=None, height=dp(48))
         topo.add_widget(txt("Regras (%d)" % len(est["regras"]), 22, TEXT, True))
@@ -1075,7 +1227,14 @@ class BotApp(App):
 
     def nova_regra(self):
         escolha = list(ESTRATEGIAS)
-        box = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(10))
+        custom = self.estado.get("custom_params", {})
+        sec_rev = custom.get("sec_rev", PARAMS.get("sec_rev", True))
+        sec_trend = custom.get("sec_trend", PARAMS.get("sec_trend", True))
+        ativos_sec = []
+        if sec_rev: ativos_sec.append("rev")
+        if sec_trend: ativos_sec.append("tend")
+
+        box = BoxLayout(orientation="vertical", padding=dp(18), spacing=dp(8))
         box.add_widget(txt("Nova regra . Trailing Escada", 19, TEXT, True, altura=32))
         box.add_widget(txt("Par (qualquer um da Binance)", 13, MUTED, altura=18))
         inp = campo_texto("", "ex.: BTCUSDT, PEPEUSDT, ETHBTC", 18)
@@ -1083,14 +1242,23 @@ class BotApp(App):
         box.add_widget(txt("Valor por ordem", 13, MUTED, altura=18))
         val = campo_numero("12", 20)
         box.add_widget(val)
+        
         box.add_widget(txt("Estrategias de entrada", 13, MUTED, altura=18))
         box.add_widget(toggle_row([(k, ROTULO[k]) for k in ESTRATEGIAS], escolha,
                                   lambda lst: escolha.__setitem__(slice(None), lst), altura=44, tam=12))
+
+        box.add_widget(txt("Saídas Secundárias", 13, MUTED, altura=18))
+        def mudar_sec(lst):
+            nonlocal ativos_sec
+            ativos_sec = lst
+        box.add_widget(toggle_row([("rev", "Reversao Forte"), ("tend", "Perdeu Tendencia")], ativos_sec,
+                                  mudar_sec, altura=44, tam=12, minimo=0))
+
         msg = txt("", 13, RED, altura=20)
         box.add_widget(msg)
         linha = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(12))
         pop = Popup(title="", separator_height=0, content=box, size_hint=(0.94, None),
-                    height=dp(520), background="", background_color=CARD)
+                    height=dp(650), background="", background_color=CARD)
         b1 = RoundBtn(bg=CARD2, text="Cancelar", radius=14)
         b2 = RoundBtn(bg=YELLOW, fg=DARK, text="Salvar", radius=14)
         b1.bind(on_release=lambda *_: pop.dismiss())
@@ -1125,7 +1293,9 @@ class BotApp(App):
                     with self.lock:
                         self.estado["regras"].append({
                             "par": sym, "valor": int(v) if v == int(v) else v,
-                            "estrategias": list(escolha)})
+                            "estrategias": list(escolha),
+                            "sec_rev": "rev" in ativos_sec,
+                            "sec_trend": "tend" in ativos_sec})
                     self.salvar()
                     pop.dismiss()
                     self.mostrar_sub("robo")
@@ -1443,16 +1613,16 @@ class BotApp(App):
 
         def prog(msg, forcar=False):
             agora = time.time()
-            if not forcar and agora - ultimo_upd["t"] < 1.0:
+            if not forcar and agora - ultimo_upd["t"] < 2.0:
                 return
             ultimo_upd["t"] = agora
             Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, msg))
 
         def job():
-            try:
-                partes, tot_n, tot_soma = [], 0, 0.0
-                funil_global = core._funil_novo() if usar_funil else None
+            partes, tot_n, tot_soma = [], 0, 0.0
+            funil_global = _funil_novo() if usar_funil else None
 
+            try:
                 for i, sym in enumerate(pares):
                     prog("Baixando %s (%d/%d)..." % (sym, i + 1, len(pares)), forcar=True)
                     t0 = time.time()
@@ -1471,14 +1641,13 @@ class BotApp(App):
                     except Exception as e:
                         partes.append("%s: erro no download (%s)" % (sym, str(e)[:80]))
                         continue
-
                     dt_dl = time.time() - t0
                     if len(candles) < 200:
                         partes.append("%s: poucos candles (%d, par novo ou invalido)." % (sym, len(candles)))
                         continue
 
-                    prog("Processando %s (%d/%d): %d candles..." % (
-                        sym, i + 1, len(pares), len(candles)), forcar=True)
+                    prog("Processando %s (%d/%d): %d candles baixados em %.1fs..." % (
+                        sym, i + 1, len(pares), len(candles), dt_dl), forcar=True)
                     t1 = time.time()
 
                     def cb_proc(feitos, total, _sym=sym, _i=i):
@@ -1487,7 +1656,7 @@ class BotApp(App):
                             _sym, _i + 1, len(pares), feitos, total, pct))
 
                     st = {}
-                    f_par = core._funil_novo() if usar_funil else None
+                    f_par = _funil_novo() if usar_funil else None
 
                     try:
                         trades = backtest_perfil(candles, ativas, perfil, p, t_ini, st,
@@ -1495,7 +1664,6 @@ class BotApp(App):
                     except Exception as e:
                         partes.append("%s: erro no processamento (%s)" % (sym, str(e)[:80]))
                         continue
-
                     dt_proc = time.time() - t1
 
                     resumo_par = []
@@ -1513,11 +1681,9 @@ class BotApp(App):
                         tot_soma += soma
                         resumo_par.append("%s . %s" % (sym, texto))
 
-                    if usar_funil and f_par is not None:
-                        resumo_par.append("\n" + core.formatar_funil(f_par, perfil["nome"], dias))
-                        if funil_global is not None:
-                            core._funil_somar(funil_global, f_par)
-
+                    if f_par is not None:
+                        resumo_par.append(formatar_funil(f_par, perfil["nome"], dias))
+                        _funil_somar(funil_global, f_par)
                     partes.append("\n".join(resumo_par))
 
                 sec = "Reversao forte %s . Perdeu tendencia %s" % (
@@ -1534,11 +1700,12 @@ class BotApp(App):
                     partes.append("TOTAL: %d op . soma %+.2f%% (aprox %+.2f USDT) . c/ taxa %+.2f%% (aprox %+.2f USDT)" % (
                         tot_n, tot_soma, valor * tot_soma / 100, liq, valor * liq / 100))
 
-                if usar_funil and len(pares) > 1 and funil_global is not None:
-                    partes.append("\n=== FUNIL CONSOLIDADO ===\n" +
-                                  core.formatar_funil(funil_global, perfil["nome"], dias))
+                if usar_funil and len(pares) > 1 and funil_global:
+                    partes.append("=== FUNIL CONSOLIDADO ===\n" +
+                                  formatar_funil(funil_global, perfil["nome"], dias))
 
-                rodape = "\n\nExecucao no fechamento do candle; stop/trailing checados na minima. Sem filtro de IA e sem slippage."
+                rodape = "\n\nExecucao no fechamento do candle; stop/trailing checados na minima. " \
+                         "Sem filtro de IA e sem slippage."
                 msg = cab + "\n\n".join(partes) + rodape
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, msg))
 

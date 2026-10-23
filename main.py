@@ -289,9 +289,6 @@ class CandleChart(Widget):
                 Line(points=pts, width=1.3)
             self._t("RSI14", xa + dp(4), ry(100) + dp(10), YELLOW, 12)
 
-# FIM DA PARTE 1 DO MAIN
-
-
 class BotApp(App):
     title = "Bot Binance"
 
@@ -916,28 +913,24 @@ class BotApp(App):
         box.add_widget(txt("Manual do Robô", 22, TEXT, True, altura=36))
         box.add_widget(txt("Entenda o que cada função faz.", 14, MUTED, altura=22))
         
-        # Bloco 1
         c1 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
         c1.add_widget(txt("Estratégias de Entrada", 16, YELLOW, True))
         c1.add_widget(txt_auto("Pullback (Correção): O preço estava subindo, recuou um pouco e está voltando a subir. O robô compra na 'promoção'.\n\nContinuidade (Tendência): O preço está em uma bandeira (lateralização) dentro de uma forte tendência de alta. O robô compra quando ele rompe a bandeira.\n\nRompimento (Explosão): O preço ficou comprimido (andando de lado) e de repente explode para cima com força. O robô compra no estouro.", 14, TEXT))
         auto_altura(c1)
         box.add_widget(c1)
         
-        # Bloco 2
         c2 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
         c2.add_widget(txt("Saídas Secundárias", 16, YELLOW, True))
         c2.add_widget(txt_auto("Stop Loss: Limite máximo de perda. Se o preço cair isso, o robô vende para não virar prejuízo grande.\n\nTrailing Stop: Proteção de lucro. Se o preço subir, o robô 'sobe a escada' e trava o lucro, garantindo que você não devolva o dinheiro ganho.\n\nSaída por Reversão: O mercado despencou com força. O robô sai antes do Stop Loss bater.\n\nSaída por Perda de Tendência: A tendência de alta perdeu força. O robô encerra a operação antes do Stop Loss bater.", 14, TEXT))
         auto_altura(c2)
         box.add_widget(c2)
         
-        # Bloco 3
         c3 = Card(bg=CARD, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
         c3.add_widget(txt("Configurando os Parâmetros", 16, YELLOW, True))
         c3.add_widget(txt_auto("Stop Loss (%): O limite máximo de perda que você aceita.\nTrailing Stop (%): Se a operação subir X%, o robô liga a proteção. Se cair, trava Y% de lucro.\nForça da Vela (x): A vela de rompimento precisa ter um corpo X vezes maior que a média.\nVolume do Rompimento (x): A vela de rompimento precisa ter um volume X vezes maior que a média.\nVelas de Compressão: Quantos candles o robô olha para trás para achar a 'caixinha'.\nATR (Volatilidade): Mede o quão agitado o mercado está.", 14, TEXT))
         auto_altura(c3)
         box.add_widget(c3)
         
-        # Bloco 4
         c4 = Card(bg=RED, radius=16, orientation="vertical", size_hint_y=None, padding=dp(16), spacing=dp(8))
         c4.add_widget(txt("Avisos Importantes", 16, TEXT, True))
         c4.add_widget(txt_auto("Risco: O mercado de criptomoedas é altamente volátil. Nenhum robô é 100% garantido.\n\nTaxas da Binance: Cada ordem custa 0.1% (ida e volta = 0.2%). Em timeframes curtos (1m), as taxas podem consumir o lucro.\n\nModo Simulação vs Real: No modo SIMULAÇÃO, você usa um saldo virtual. No modo REAL, o robô usa a sua conta.", 14, TEXT))
@@ -945,9 +938,6 @@ class BotApp(App):
         box.add_widget(c4)
 
         return rolavel(box)
-
-# FIM DA PARTE 2 DO MAIN
-
 
     def sub_robo(self):
         est = self.estado
@@ -1251,7 +1241,7 @@ class BotApp(App):
         def mudar_sec(lst):
             nonlocal ativos_sec
             ativos_sec = lst
-        box.add_widget(toggle_row([("rev", "Reversao Forte"), ("tend", "Perdeu Tendencia")], ativos_sec,
+        box.add_widget(toggle_row([("rev", "Reversao forte"), ("tend", "Perdeu tendencia")], ativos_sec,
                                   mudar_sec, altura=44, tam=12, minimo=0))
 
         msg = txt("", 13, RED, altura=20)
@@ -1620,7 +1610,14 @@ class BotApp(App):
 
         def job():
             partes, tot_n, tot_soma = [], 0, 0.0
-            funil_global = _funil_novo() if usar_funil else None
+            
+            funil_global = None
+            if usar_funil:
+                try:
+                    funil_global = {"total": 0, "geral": {}, "passou_geral": 0, "estrategia": {"pullback": {}, "continuidade": {}, "rompimento": {}}, "entradas": {"pullback": 0, "continuidade": 0, "rompimento": 0}}
+                except Exception as e:
+                    Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, "ERRO: core.py desatualizado.\n%s" % str(e)))
+                    return
 
             try:
                 for i, sym in enumerate(pares):
@@ -1656,14 +1653,16 @@ class BotApp(App):
                             _sym, _i + 1, len(pares), feitos, total, pct))
 
                     st = {}
-                    f_par = _funil_novo() if usar_funil else None
+                    f_par = {"total": 0, "geral": {}, "passou_geral": 0, "estrategia": {"pullback": {}, "continuidade": {}, "rompimento": {}}, "entradas": {"pullback": 0, "continuidade": 0, "rompimento": 0}} if usar_funil else None
 
                     try:
                         trades = backtest_perfil(candles, ativas, perfil, p, t_ini, st,
                                                  funil=f_par, progresso_cb=cb_proc)
                     except Exception as e:
-                        partes.append("%s: erro no processamento (%s)" % (sym, str(e)[:80]))
+                        import traceback
+                        partes.append("%s: erro no processamento.\n%s" % (sym, traceback.format_exc()[-200:]))
                         continue
+                    
                     dt_proc = time.time() - t1
 
                     resumo_par = []
@@ -1682,8 +1681,36 @@ class BotApp(App):
                         resumo_par.append("%s . %s" % (sym, texto))
 
                     if f_par is not None:
-                        resumo_par.append(formatar_funil(f_par, perfil["nome"], dias))
-                        _funil_somar(funil_global, f_par)
+                        try:
+                            # Calcula o funil manual aqui mesmo (sem depender do core.py)
+                            linhas_f = ["FUNIL (%s, %sd) - %d candles avaliados" % (perfil["nome"], dias, f_par["total"])]
+                            for motivo, qtd in sorted(f_par["geral"].items(), key=lambda x: -x[1]):
+                                linhas_f.append("  [geral] %s: %d (%.1f%%)" % (motivo, qtd, (qtd/f_par["total"]*100) if f_par["total"] else 0))
+                            pg = f_par["passou_geral"]
+                            linhas_f.append("  -> passaram do geral: %d (%.1f%%)" % (pg, (pg/f_par["total"]*100) if f_par["total"] else 0))
+                            base = pg if pg > 0 else 1
+                            for est in ESTRATEGIAS:
+                                motivos = f_par["estrategia"].get(est, {})
+                                entrada_n = f_par["entradas"].get(est, 0)
+                                if not motivos and not entrada_n:
+                                    continue
+                                linhas_f.append("  %s: %d entradas" % (ROTULO[est], entrada_n))
+                                for motivo, qtd in sorted(motivos.items(), key=lambda x: -x[1]):
+                                    linhas_f.append("    - %s: %d (%.1f%%)" % (motivo, qtd, (qtd/base*100)))
+                            resumo_par.append("\n".join(linhas_f))
+                            
+                            # Acumula no global
+                            funil_global["total"] += f_par["total"]
+                            funil_global["passou_geral"] += f_par["passou_geral"]
+                            for k, v in f_par["geral"].items():
+                                funil_global["geral"][k] = funil_global["geral"].get(k, 0) + v
+                            for est in ESTRATEGIAS:
+                                for k, v in f_par["estrategia"].get(est, {}).items():
+                                    funil_global["estrategia"][est][k] = funil_global["estrategia"][est].get(k, 0) + v
+                                funil_global["entradas"][est] += f_par["entradas"].get(est, 0)
+                                
+                        except Exception as e:
+                            resumo_par.append("Erro no funil: %s" % str(e))
                     partes.append("\n".join(resumo_par))
 
                 sec = "Reversao forte %s . Perdeu tendencia %s" % (
@@ -1700,9 +1727,17 @@ class BotApp(App):
                     partes.append("TOTAL: %d op . soma %+.2f%% (aprox %+.2f USDT) . c/ taxa %+.2f%% (aprox %+.2f USDT)" % (
                         tot_n, tot_soma, valor * tot_soma / 100, liq, valor * liq / 100))
 
-                if usar_funil and len(pares) > 1 and funil_global:
-                    partes.append("=== FUNIL CONSOLIDADO ===\n" +
-                                  formatar_funil(funil_global, perfil["nome"], dias))
+                if usar_funil and len(pares) > 1 and funil_global and funil_global["total"] > 0:
+                    try:
+                        linhas_g = ["=== FUNIL CONSOLIDADO ==="]
+                        linhas_g.append("FUNIL (%s, %sd) - %d candles avaliados" % (perfil["nome"], dias, funil_global["total"]))
+                        for motivo, qtd in sorted(funil_global["geral"].items(), key=lambda x: -x[1]):
+                            linhas_g.append("  [geral] %s: %d (%.1f%%)" % (motivo, qtd, (qtd/funil_global["total"]*100)))
+                        pg = funil_global["passou_geral"]
+                        linhas_g.append("  -> passaram do geral: %d (%.1f%%)" % (pg, (pg/funil_global["total"]*100)))
+                        partes.append("\n".join(linhas_g))
+                    except Exception:
+                        pass
 
                 rodape = "\n\nExecucao no fechamento do candle; stop/trailing checados na minima. " \
                          "Sem filtro de IA e sem slippage."
@@ -1715,7 +1750,6 @@ class BotApp(App):
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, erro_msg))
 
         threading.Thread(target=job, daemon=True).start()
-
 
 if __name__ == "__main__":
     BotApp().run()

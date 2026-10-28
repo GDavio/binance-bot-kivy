@@ -191,9 +191,6 @@ class Binance:
         res = self._assinado("POST", "/api/v3/order", {"symbol": sym, "side": "SELL", "type": "MARKET", "quantity": format(q.normalize(), "f")})
         return self._resumo(res, sym)
 
-# FIM DA PARTE 1 DO CORE
-
-
 def calcular_rsi(closes, period=14):
     if len(closes) < period + 1:
         return 50.0
@@ -462,7 +459,8 @@ def sinais_perfil(d, i, perfil, p=None, funil=None):
         ("fechamento fraco (rejeicao)", c > o and c >= l + 0.6 * (h - l)),
         ("volume abaixo de %.1fx a media" % vol_exigido, rvol >= vol_exigido)])
     return res
-
+    
+    
 def escolher_tipo_dia(res, ativas):
     for nome in ESTRATEGIAS:
         if nome in ativas and res.get(nome):
@@ -485,9 +483,6 @@ def params_atr(atr_pct, base=None):
     trava = min(max(t0, TRAVA_FRAC * ativa), ativa - 0.05)
     b.update(stop_pct=stop, trail_ativa=ativa, trail_trava=trava, escala=(ativa / a0 if a0 > 0 else 1.0))
     return b
-
-# FIM DA PARTE 2 DO CORE
-
 
 def trava_trailing(lucro_max, trava1=None, esc=1.0):
     t1 = TRAIL_TRAVA if trava1 is None else trava1
@@ -728,9 +723,8 @@ def migrar_estado(pasta):
             except Exception: pass
 
 def caminho_relatorio(pasta):
-    d = "/storage/emulated/0/Download"
-    if os.path.isdir(d) and os.access(d, os.W_OK): return os.path.join(d, "relatorio_bot.txt")
-    return os.path.join(pasta, "relatorio_bot.txt")
+    # ALTERADO: Salva sempre na pasta de dados privada para evitar bloqueios do Android
+    return os.path.join(pasta, "relatorio_bot.csv")
 
 class Motor:
     def __init__(self, pasta, origem="local"):
@@ -1028,15 +1022,34 @@ class Motor:
         self.salvar_relatorio(sym, pos, modo, lucro, preco_saida, lucro_max, a)
 
     def salvar_relatorio(self, sym, pos, modo, lucro, preco_saida, lucro_max, a):
+        # NOVO RELATORIO CSV COMPLETO
         try:
+            cabecalho = not os.path.exists(self.arq_relatorio) or os.path.getsize(self.arq_relatorio) == 0
             with open(self.arq_relatorio, "a") as f:
-                f.write("==============================\n")
-                f.write("Par: %s  (%s)\nData: %s\n" % (sym, "SIMULACAO" if modo == "SIM" else "REAL", datetime.now()))
-                f.write("Perfil: %s . Estrategia: %s\n--- ENTRADA ---\n" % (pos.get("modelo", "5m"), pos["tipo"]))
-                f.write("Preco: %.4f\nRSI: %.2f\nMA9: %.4f\nMA21: %.4f\n" % (pos["entrada"], pos["rsi"], pos["ma9"], pos["ma21"]))
-                f.write("--- SAIDA ---\nPreco: %.4f\nRSI: %.2f\nMA9: %.4f\nMA21: %.4f\n" % (preco_saida, a["rsi"], a["ma9"], a["ma21"]))
-                f.write("--- RESULTADO ---\nLucro: %.2f%%\nLucro Maximo: %.2f%%\nTempo operacao: %ds\n\n\n" % (lucro, lucro_max, int(time.time() - pos["t"])))
-        except Exception as e: print("Erro ao salvar relatorio:", e)
+                if cabecalho:
+                    f.write("Data,Par,Perfil,Estrategia,Preco_Entrada,RSI_Entrada,ATR_Entrada,MA9_Entrada,MA21_Entrada,Preco_Saida,RSI_Saida,MA9_Saida,MA21_Saida,Lucro_Maximo(%),Lucro_Final(%),Motivo_Saida,Tempo(s)\n")
+                
+                dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Pega os dados da posicao que foram salvos na entrada
+                rsi_in = pos.get("rsi", 0)
+                atr_in = pos.get("vol", 0)
+                ma9_in = pos.get("ma9", 0)
+                ma21_in = pos.get("ma21", 0)
+                # Pega os dados da saida (calculados agora)
+                rsi_out = a.get("rsi", 0)
+                ma9_out = a.get("ma9", 0)
+                ma21_out = a.get("ma21", 0)
+                tempo = int(time.time() - pos["t"])
+                
+                linha = "%s,%s,%s,%s,%.4f,%.2f,%.3f%%,%.4f,%.4f,%.4f,%.2f,%.4f,%.4f,%.2f,%.2f,%s,%d\n" % (
+                    dt_str, sym, pos.get("modelo", "5m"), pos["tipo"], 
+                    pos["entrada"], rsi_in, atr_in, ma9_in, ma21_in,
+                    preco_saida, rsi_out, ma9_out, ma21_out,
+                    lucro_max, lucro, motivo.replace(",", ""), tempo
+                )
+                f.write(linha)
+        except Exception as e: 
+            print("Erro ao salvar relatorio CSV:", e)
 
     def tentar_travar(self):
         try: import fcntl

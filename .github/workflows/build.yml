@@ -63,12 +63,13 @@ jobs:
         run: |
           buildozer -v android release
 
-      # --- NOVO PASSO AQUI ---
-      - name: Localizar e Copiar o APK
+      # --- PASSO CORRIGIDO ---
+      - name: Localizar e Copiar o APK de Release
         run: |
           mkdir -p bin
+          # Procura o APK dentro da pasta .buildozer, ignorando a pasta bin/ da raiz
           find .buildozer -name "*.apk" -exec cp {} bin/ \;
-          echo "Verificando se o APK foi copiado:"
+          echo "Conteúdo da pasta bin/:"
           ls -la bin/
       # -----------------------
 
@@ -77,4 +78,4 @@ jobs:
         with:
           name: binance-bot-apk
           path: bin/*.apk
-          if-no-files-found: error # Isso força o build a falhar se o APK não for achado, para não termos surpresas.
+          if-no-files-found: error

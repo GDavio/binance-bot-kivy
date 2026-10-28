@@ -33,13 +33,11 @@ jobs:
             libavformat-dev libavcodec-dev zlib1g-dev libsqlite3-dev sqlite3 \
             bzip2 libfreetype6-dev autoconf libtool pkg-config libssl-dev \
             libffi-dev zip unzip
-
       - name: Instalar Buildozer e Cython
         run: |
           pip install --upgrade pip setuptools wheel
           pip install "cython<3.0.0"
           pip install buildozer
-
       - name: Baixar e Configurar Android NDK r25b
         run: |
           mkdir -p $HOME/android-ndk
@@ -47,8 +45,7 @@ jobs:
           wget -q https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
           unzip -q android-ndk-r25b-linux.zip
           rm android-ndk-r25b-linux.zip
-
-      # --- NOVO PASSO: CRIAR A CHAVE DE ASSINATURA ---
+          
       - name: Decodificar Keystore e Configurar Assinatura
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -58,7 +55,7 @@ jobs:
           echo "P4A_RELEASE_KEYSTORE_PASSWD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
           echo "P4A_RELEASE_KEYALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
           echo "P4A_RELEASE_KEYALIAS_PASSWD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
-
+          
       - name: Gerar APK
         env:
           ANDROID_NDK_HOME: ${{ runner.workspace }}/../android-ndk/android-ndk-r25b
@@ -66,8 +63,18 @@ jobs:
         run: |
           buildozer -v android release
 
+      # --- NOVO PASSO AQUI ---
+      - name: Localizar e Copiar o APK
+        run: |
+          mkdir -p bin
+          find .buildozer -name "*.apk" -exec cp {} bin/ \;
+          echo "Verificando se o APK foi copiado:"
+          ls -la bin/
+      # -----------------------
+
       - name: Disponibilizar APK para Download
         uses: actions/upload-artifact@v4
         with:
           name: binance-bot-apk
           path: bin/*.apk
+          if-no-files-found: error # Isso força o build a falhar se o APK não for achado, para não termos surpresas.

@@ -4,6 +4,7 @@ import random
 import threading
 import time
 from datetime import datetime
+from kivy.utils import platform
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -20,7 +21,6 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.switch import Switch
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
-from kivy.utils import platform
 
 import importlib
 import core
@@ -326,6 +326,7 @@ class BotApp(App):
         self.filtro_exec = None
         self.exec_box = None
         self.btn_f = {}
+        self.painel_params = None # Controle do painel de ajustes
 
         root = BoxLayout(orientation="vertical")
         root.add_widget(self.montar_barra())
@@ -394,6 +395,9 @@ class BotApp(App):
     def hist(self, modo=None):
         modo = modo or self.estado["modo"]
         return self.estado["ia"] if modo == "REAL" else self.estado["ia_sim"]
+        
+# FIM DA PARTE 1 DO MAIN
+
 
     def montar_barra(self):
         self.barra = Card(bg=CARD, radius=0, size_hint_y=None, height=dp(72),
@@ -900,7 +904,7 @@ class BotApp(App):
         lin = BoxLayout(size_hint_y=None, height=dp(32), spacing=dp(4))
         lin.add_widget(txt(texto, 14, TEXT))
         if chave_dica:
-            b = RoundBtn(bg=CLEAR, fg=BLUE, text="(i)", font_size=sp(14), bold=True,
+            b = RoundBtn(bg=CLEAR, fg=BLUE, text="(?)", font_size=sp(14), bold=True,
                          size_hint=(None, None), size=(dp(30), dp(30)), radius=15)
             b.bind(on_release=lambda *_: self._ajuda(chave_dica))
             lin.add_widget(b)
@@ -943,6 +947,20 @@ class BotApp(App):
         est = self.estado
         box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
 
+        # --- RESUMO DO DIA (NOVO) ---
+        exs_hoje = [e for e in est["execucoes"] if "SELL" in e["t"] and datetime.fromtimestamp(e.get("ts", 0)).date() == datetime.now().date()]
+        n_hoje = len(exs_hoje)
+        acertos_hoje = len([e for e in exs_hoje if e["ok"]])
+        acerto_pct = (acertos_hoje / n_hoje * 100) if n_hoje > 0 else 0
+        
+        c_resumo = Card(bg=CARD2, radius=18, size_hint_y=None, height=dp(70), padding=dp(16))
+        t_res = BoxLayout(orientation="vertical")
+        t_res.add_widget(txt("Resumo de Hoje", 16, YELLOW, True))
+        t_res.add_widget(txt("Operações: %d  |  Acerto: %.0f%%" % (n_hoje, acerto_pct), 15, TEXT))
+        c_resumo.add_widget(t_res)
+        box.add_widget(c_resumo)
+        # ----------------------------
+
         c1 = Card(bg=CARD, radius=18, size_hint_y=None, height=dp(86), padding=dp(18))
         t = BoxLayout(orientation="vertical")
         t.add_widget(txt("Robo 24/7", 22, TEXT, True))
@@ -968,6 +986,21 @@ class BotApp(App):
         info_p.height = dp(40)
         box.add_widget(info_p)
 
+        # --- BOTOES DE CONTROLE (NOVO) ---
+        controles = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
+        self.btn_pausar = RoundBtn(bg=YELLOW if est.get("pausado") else CARD2, 
+                                   fg=DARK if est.get("pausado") else TEXT, 
+                                   text="Retomar Entradas" if est.get("pausado") else "Pausar Entradas", 
+                                   font_size=sp(14), radius=14)
+        self.btn_pausar.bind(on_release=self.toggle_pausa)
+        controles.add_widget(self.btn_pausar)
+        
+        btn_exportar = RoundBtn(bg=BLUE, fg=TEXT, text="Exportar Relatorio", font_size=sp(14), radius=14)
+        btn_exportar.bind(on_release=lambda *_: self.exportar_relatorio())
+        controles.add_widget(btn_exportar)
+        box.add_widget(controles)
+        # ---------------------------------
+
         box.add_widget(self._label_com_ajuda("Saídas Secundárias", "sec_rev"))
         ativos_sec = []
         custom = est.get("custom_params", {})
@@ -988,8 +1021,8 @@ class BotApp(App):
         btn_ajustes = RoundBtn(bg=CARD2, text="Ajustes Fino do Robo (Parametros)", font_size=sp(15), size_hint_y=None, height=dp(50), radius=14)
         box.add_widget(btn_ajustes)
         
-        painel_params = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
-        auto_altura(painel_params)
+        self.painel_params = BoxLayout(orientation="vertical", spacing=dp(10), size_hint_y=None)
+        auto_altura(self.painel_params)
         
         def get_p(k):
             return str(custom.get(k, PARAMS.get(k, 0)))
@@ -1008,19 +1041,20 @@ class BotApp(App):
         
         inputs = {}
         for k, lbl, val, dica in campos:
-            painel_params.add_widget(self._label_com_ajuda(lbl, dica))
+            self.painel_params.add_widget(self._label_com_ajuda(lbl, dica))
             inp = campo_numero(val, 18)
-            painel_params.add_widget(inp)
+            self.painel_params.add_widget(inp)
             inputs[k] = inp
             
         btn_salvar_p = RoundBtn(bg=GREEN, fg=DARK, text="Salvar Parametros", font_size=sp(16), size_hint_y=None, height=dp(50), radius=14)
-        painel_params.add_widget(btn_salvar_p)
+        self.painel_params.add_widget(btn_salvar_p)
         
         def toggle_painel(*_):
-            if painel_params.parent:
-                box.remove_widget(painel_params)
+            # ALTERADO: O painel agora abre logo abaixo do botao, e nao no final da lista
+            if self.painel_params.parent:
+                box.remove_widget(self.painel_params)
             else:
-                box.add_widget(painel_params)
+                box.add_widget(self.painel_params, index=box.children.index(btn_ajustes))
                 
         def salvar_p(*_):
             novo_custom = dict(self.estado.get("custom_params", {}))
@@ -1127,6 +1161,44 @@ class BotApp(App):
             self.atualizar_pnl_posicoes()
             self._ev = Clock.schedule_interval(lambda dt: self.atualizar_pnl_posicoes(), 4)
         return rolavel(box)
+
+    def toggle_pausa(self, *a):
+        est = self.estado
+        est["pausado"] = not est.get("pausado", False)
+        self.salvar()
+        if self.btn_pausar:
+            self.btn_pausar.text = "Retomar Entradas" if est["pausado"] else "Pausar Entradas"
+            self.btn_pausar.estilo(YELLOW if est["pausado"] else CARD2, DARK if est["pausado"] else TEXT)
+
+    def exportar_relatorio(self, *a):
+        arq = core.caminho_relatorio(self.pasta)
+        if not os.path.exists(arq) or os.path.getsize(arq) == 0:
+            return self.aviso("Relatorio vazio ou nao encontrado.")
+        try:
+            if platform == "android":
+                from jnius import autoclass, cast
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                File = autoclass("java.io.File")
+                FileProvider = autoclass("androidx.core.content.FileProvider")
+                
+                context = PythonActivity.mActivity
+                f = File(arq)
+                
+                # Usa o FileProvider para compartilhar o arquivo de forma segura
+                uri = FileProvider.getUriForFile(context, context.getPackageName() + ".provider", f)
+                
+                intent = Intent(Intent.ACTION_SEND)
+                intent.setType("text/csv")
+                intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                
+                context.startActivity(Intent.createChooser(intent, "Salvar ou Compartilhar Relatorio"))
+            else:
+                self.aviso("Exportacao disponivel apenas no Android compilado.")
+        except Exception as e:
+            self.aviso("Erro ao exportar: %s" % str(e))
 
     def filtrar_exec(self, lado):
         self.filtro_exec = None if self.filtro_exec == lado else lado
@@ -1750,6 +1822,7 @@ class BotApp(App):
                 Clock.schedule_once(lambda dt: self.mostrar_card(self.bt_out, erro_msg))
 
         threading.Thread(target=job, daemon=True).start()
+
 
 if __name__ == "__main__":
     BotApp().run()

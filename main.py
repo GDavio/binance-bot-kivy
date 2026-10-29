@@ -288,7 +288,7 @@ class CandleChart(Widget):
                 Color(*YELLOW)
                 Line(points=pts, width=1.3)
             self._t("RSI14", xa + dp(4), ry(100) + dp(10), YELLOW, 12)
-
+            
 class BotApp(App):
     title = "Bot Binance"
 
@@ -326,7 +326,7 @@ class BotApp(App):
         self.filtro_exec = None
         self.exec_box = None
         self.btn_f = {}
-        self.painel_params = None # Controle do painel de ajustes
+        self.painel_params = None
 
         root = BoxLayout(orientation="vertical")
         root.add_widget(self.montar_barra())
@@ -395,9 +395,6 @@ class BotApp(App):
     def hist(self, modo=None):
         modo = modo or self.estado["modo"]
         return self.estado["ia"] if modo == "REAL" else self.estado["ia_sim"]
-        
-# FIM DA PARTE 1 DO MAIN
-
 
     def montar_barra(self):
         self.barra = Card(bg=CARD, radius=0, size_hint_y=None, height=dp(72),
@@ -947,7 +944,6 @@ class BotApp(App):
         est = self.estado
         box = BoxLayout(orientation="vertical", spacing=dp(14), padding=[0, dp(4)])
 
-        # --- RESUMO DO DIA (NOVO) ---
         exs_hoje = [e for e in est["execucoes"] if "SELL" in e["t"] and datetime.fromtimestamp(e.get("ts", 0)).date() == datetime.now().date()]
         n_hoje = len(exs_hoje)
         acertos_hoje = len([e for e in exs_hoje if e["ok"]])
@@ -959,7 +955,6 @@ class BotApp(App):
         t_res.add_widget(txt("Operações: %d  |  Acerto: %.0f%%" % (n_hoje, acerto_pct), 15, TEXT))
         c_resumo.add_widget(t_res)
         box.add_widget(c_resumo)
-        # ----------------------------
 
         c1 = Card(bg=CARD, radius=18, size_hint_y=None, height=dp(86), padding=dp(18))
         t = BoxLayout(orientation="vertical")
@@ -986,7 +981,6 @@ class BotApp(App):
         info_p.height = dp(40)
         box.add_widget(info_p)
 
-        # --- BOTOES DE CONTROLE (NOVO) ---
         controles = BoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
         self.btn_pausar = RoundBtn(bg=YELLOW if est.get("pausado") else CARD2, 
                                    fg=DARK if est.get("pausado") else TEXT, 
@@ -999,7 +993,6 @@ class BotApp(App):
         btn_exportar.bind(on_release=lambda *_: self.exportar_relatorio())
         controles.add_widget(btn_exportar)
         box.add_widget(controles)
-        # ---------------------------------
 
         box.add_widget(self._label_com_ajuda("Saídas Secundárias", "sec_rev"))
         ativos_sec = []
@@ -1050,7 +1043,6 @@ class BotApp(App):
         self.painel_params.add_widget(btn_salvar_p)
         
         def toggle_painel(*_):
-            # ALTERADO: O painel agora abre logo abaixo do botao, e nao no final da lista
             if self.painel_params.parent:
                 box.remove_widget(self.painel_params)
             else:
@@ -1170,35 +1162,37 @@ class BotApp(App):
             self.btn_pausar.text = "Retomar Entradas" if est["pausado"] else "Pausar Entradas"
             self.btn_pausar.estilo(YELLOW if est["pausado"] else CARD2, DARK if est["pausado"] else TEXT)
 
+    # --- FUNÇÃO DE EXPORTAR CORRIGIDA (ACTION_SEND NATIVO) ---
     def exportar_relatorio(self, *a):
         arq = core.caminho_relatorio(self.pasta)
         if not os.path.exists(arq) or os.path.getsize(arq) == 0:
             return self.aviso("Relatorio vazio ou nao encontrado.")
-        try:
-            if platform == "android":
+        
+        if platform == "android":
+            try:
                 from jnius import autoclass, cast
-                PythonActivity = autoclass("org.kivy.android.PythonActivity")
-                Intent = autoclass("android.content.Intent")
-                Uri = autoclass("android.net.Uri")
-                File = autoclass("java.io.File")
-                FileProvider = autoclass("androidx.core.content.FileProvider")
+                from android import mActivity
+
+                Intent = autoclass('android.content.Intent')
+                String = autoclass('java.lang.String')
                 
-                context = PythonActivity.mActivity
-                f = File(arq)
+                with open(arq, 'r') as f:
+                    conteudo = f.read()
                 
-                # Usa o FileProvider para compartilhar o arquivo de forma segura
-                uri = FileProvider.getUriForFile(context, context.getPackageName() + ".provider", f)
+                send_intent = Intent(Intent.ACTION_SEND)
+                send_intent.setType("text/csv")
+                send_intent.putExtra(Intent.EXTRA_SUBJECT, String("Relatorio Bot Binance"))
+                send_intent.putExtra(Intent.EXTRA_TEXT, String(conteudo))
                 
-                intent = Intent(Intent.ACTION_SEND)
-                intent.setType("text/csv")
-                intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                
-                context.startActivity(Intent.createChooser(intent, "Salvar ou Compartilhar Relatorio"))
-            else:
-                self.aviso("Exportacao disponivel apenas no Android compilado.")
-        except Exception as e:
-            self.aviso("Erro ao exportar: %s" % str(e))
+                titulo = cast('java.lang.CharSequence', String("Compartilhar Relatório (CSV)"))
+                chooser = Intent.createChooser(send_intent, titulo)
+                mActivity.startActivity(chooser)
+
+            except Exception as e:
+                self.aviso("Erro ao exportar: %s" % str(e))
+        else:
+            self.aviso("Exportacao disponivel apenas no Android compilado.")
+    # -------------------------------------------------------------------
 
     def filtrar_exec(self, lado):
         self.filtro_exec = None if self.filtro_exec == lado else lado
@@ -1754,7 +1748,6 @@ class BotApp(App):
 
                     if f_par is not None:
                         try:
-                            # Calcula o funil manual aqui mesmo (sem depender do core.py)
                             linhas_f = ["FUNIL (%s, %sd) - %d candles avaliados" % (perfil["nome"], dias, f_par["total"])]
                             for motivo, qtd in sorted(f_par["geral"].items(), key=lambda x: -x[1]):
                                 linhas_f.append("  [geral] %s: %d (%.1f%%)" % (motivo, qtd, (qtd/f_par["total"]*100) if f_par["total"] else 0))
@@ -1771,7 +1764,6 @@ class BotApp(App):
                                     linhas_f.append("    - %s: %d (%.1f%%)" % (motivo, qtd, (qtd/base*100)))
                             resumo_par.append("\n".join(linhas_f))
                             
-                            # Acumula no global
                             funil_global["total"] += f_par["total"]
                             funil_global["passou_geral"] += f_par["passou_geral"]
                             for k, v in f_par["geral"].items():

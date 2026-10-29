@@ -39,6 +39,10 @@ android.accept_sdk_license = True
 # FORÇA O BUILD A GERAR APK (E NÃO O .AAB DA PLAY STORE)
 android.release_artifact = apk
 
+# ADICIONADO PARA CORRIGIR O ERRO DO FILEPROVIDER (EXPORTAR RELATÓRIO)
+android.gradle_dependencies = androidx.core:core:1.12.0
+android.add_aars = androidx.core:core:1.12.0
+
 [buildozer]
 
 log_level = 2

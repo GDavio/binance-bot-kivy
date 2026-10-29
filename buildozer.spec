@@ -36,6 +36,9 @@ android.ndk = 25b
 android.archs = arm64-v8a
 android.accept_sdk_license = True
 
+# FORÇA O BUILD A GERAR APK (E NÃO O .AAB DA PLAY STORE)
+android.release_artifact = apk
+
 [buildozer]
 
 log_level = 2

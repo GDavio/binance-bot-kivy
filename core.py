@@ -37,7 +37,7 @@ PERFIL_5M = {
     "ma_f": 9, "ma_s": 21, "atr_p": 14, "rsi_p": 14,
     "vol_min": 0.08, "vwap": True, "ctx_ma": 21,
     "n_compressao": 8, "atr_compressao": 4.0, "atr_esticado": 4.0,
-    "rsi_pull_min": 25, "rsi_pull_max": 55, "rsi_cont_min": 45, "rsi_cont_max": 65
+    "rsi_pull_min": 40, "rsi_pull_max": 65, "rsi_cont_min": 45, "rsi_cont_max": 65
 }
 
 PERFIL_1M = {
@@ -259,6 +259,9 @@ def _atr(h, l, c, p=14):
     return out
 
 def _ctx_semaforo(c_gatilho, tf_gatilho, tf_semaforo, ma=21):
+    # CORREÇÃO DO BUG DO SEMÁFORO:
+    # Em vez de sincronizar por timestamp (que quebrava no backtest devido a fusos/milissegundos),
+    # sincronizamos pela quantidade de candles (índice).
     n = len(c_gatilho)
     ctx = [False] * n
     s_gat = INTERVALO_S[tf_gatilho]
@@ -266,13 +269,16 @@ def _ctx_semaforo(c_gatilho, tf_gatilho, tf_semaforo, ma=21):
     fator = s_sem // s_gat
     if fator < 1:
         return ctx
+    
     cl = []
     e = None
     e_ant = None
     k = 2.0 / (ma + 1)
+    
     for i in range(n):
-        t = c_gatilho[i][4]
-        if (t // s_sem * s_sem) + (fator - 1) * s_gat == t:
+        # A cada 'fator' candles de gatilho, formamos 1 candle de semáforo.
+        # Ex: perfil 1m (gatilho 1m, semaforo 5m) -> a cada 5 candles, atualiza a EMA de 5m.
+        if (i + 1) % fator == 0:
             cl.append(c_gatilho[i][3])
             m = len(cl)
             if m == ma:
@@ -281,8 +287,10 @@ def _ctx_semaforo(c_gatilho, tf_gatilho, tf_semaforo, ma=21):
             elif m > ma:
                 e_ant = e
                 e = cl[-1] * k + e * (1 - k)
+                
         if e is not None and e_ant is not None and len(cl) >= ma:
             ctx[i] = cl[-1] > e and e > e_ant
+            
     return ctx
 
 def _vwap_dia(c_gatilho):
@@ -415,7 +423,7 @@ def sinais_perfil(d, i, perfil, p=None, funil=None):
 
     checar("pullback", [
         ("topo anterior nao veio antes do fundo do recuo", pico > min_low and i - idx_pico >= 2),
-        ("recuo fora de 0.7-3.5 ATR", 0.7 <= (pico - min_low) / atr <= 3.5),
+        ("recuo fora de 0.3-4.5 ATR", 0.3 <= (pico - min_low) / atr <= 4.5),
         ("recuo nao chegou na EMA21", any(lows[j] <= d["ema21"][j] * 1.001 for j in jan)),
         ("recuo perdeu a EMA50", min_low >= d["ema50"][idx_min] * 0.998),
         ("RSI nao desceu ate ~%.0f no recuo" % p["rsi_pull_max"], rsi_min <= p["rsi_pull_max"]),
@@ -723,7 +731,6 @@ def migrar_estado(pasta):
             except Exception: pass
 
 def caminho_relatorio(pasta):
-    # ALTERADO: Salva sempre na pasta de dados privada para evitar bloqueios do Android
     return os.path.join(pasta, "relatorio_bot.csv")
 
 class Motor:
@@ -1022,7 +1029,6 @@ class Motor:
         self.salvar_relatorio(sym, pos, modo, lucro, preco_saida, lucro_max, a)
 
     def salvar_relatorio(self, sym, pos, modo, lucro, preco_saida, lucro_max, a):
-        # NOVO RELATORIO CSV COMPLETO
         try:
             cabecalho = not os.path.exists(self.arq_relatorio) or os.path.getsize(self.arq_relatorio) == 0
             with open(self.arq_relatorio, "a") as f:
@@ -1030,12 +1036,10 @@ class Motor:
                     f.write("Data,Par,Perfil,Estrategia,Preco_Entrada,RSI_Entrada,ATR_Entrada,MA9_Entrada,MA21_Entrada,Preco_Saida,RSI_Saida,MA9_Saida,MA21_Saida,Lucro_Maximo(%),Lucro_Final(%),Motivo_Saida,Tempo(s)\n")
                 
                 dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                # Pega os dados da posicao que foram salvos na entrada
                 rsi_in = pos.get("rsi", 0)
                 atr_in = pos.get("vol", 0)
                 ma9_in = pos.get("ma9", 0)
                 ma21_in = pos.get("ma21", 0)
-                # Pega os dados da saida (calculados agora)
                 rsi_out = a.get("rsi", 0)
                 ma9_out = a.get("ma9", 0)
                 ma21_out = a.get("ma21", 0)
